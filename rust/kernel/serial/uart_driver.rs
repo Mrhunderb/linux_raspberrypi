@@ -7,6 +7,7 @@
 use super::uart_console::Console;
 
 use core::mem::MaybeUninit;
+use core::ptr::null_mut;
 
 use crate::{
     bindings, error::{to_result, Result}, pr_info, str::CStr, ThisModule
@@ -30,7 +31,7 @@ impl UartDriver {
         uart_driver.driver_name = driver_name.as_char_ptr();
         uart_driver.dev_name = dev_name.as_char_ptr();
         uart_driver.cons = reg.as_ptr();
-        // uart_driver.state = null_mut();
+        uart_driver.state = null_mut();
         // uart_driver.tty_driver = null_mut();
         Self(uart_driver)
     }

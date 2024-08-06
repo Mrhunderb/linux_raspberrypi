@@ -213,7 +213,7 @@ impl<T: UartPortOps> PortRegistration<T> {
             pr_warn!("this uart port driver is already registered\n");
             return Err(EINVAL);
         }
-        let mut port = &mut this.uart_port;
+        let port = &mut this.uart_port;
         port.0.dev = dev.raw_device();
             // port.irq = irq;
             // port.membase = membase;
@@ -235,7 +235,7 @@ impl<T: UartPortOps> PortRegistration<T> {
     }
 }
 
-impl <T: UartPortOps> Drop  for PortRegistration<T> {
+impl <T: UartPortOps> Drop for PortRegistration<T> {
     fn drop(&mut self) {
         // Free data as well.
         // SAFETY: `data_pointer` was returned by `into_foreign` during registration.

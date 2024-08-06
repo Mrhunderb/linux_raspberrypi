@@ -5,21 +5,9 @@
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
 use kernel::{
-    bindings,
-    prelude::*, 
-    amba, 
-    clk::Clk, 
-    device, 
-    error::{code::*, Result},
-    module_amba_driver,
-    c_str,
-    io_mem::IoMem, 
-    serial:: {
-        uart_console::{Console, ConsoleOps, flags}, 
-        uart_driver::UartDriver, 
-        uart_port::{UartPort, PortRegistration},
-        pl011_config::*,
-    },
+    amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
+        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{PortRegistration, UartPort, UartPortOps}
+    }, sync::Arc
 };
 
 const UART_SIZE: usize = 0x200;
@@ -129,15 +117,13 @@ type PL011Registrations = PortRegistration<PL011Device>;
 type PL011DeviceData = device::Data<PL011Registrations, PL011Resources, PL011Data>;
 
 // Linux Raw id table
-kernel::define_amba_id_table! {MY_AMDA_ID_TABLE, (), [
+define_amba_id_table! {MY_AMDA_ID_TABLE, (), [
     ({id: 0x00041011, mask: 0x000fffff}, None),
 ]}
-// Linux Raw id table
-kernel::module_amba_id_table!(UART_MOD_TABLE, MY_AMDA_ID_TABLE);
 
 struct PL011Device;
 impl amba::Driver for PL011Device {
-    // type Data = Arc<DeviceData>;
+    // type Data = Arc<PL011DeviceData>;
 
     kernel::driver_amba_id_table!(MY_AMDA_ID_TABLE);
     fn probe(adev: &mut amba::Device, _data: Option<&Self::IdInfo>) -> Result {
@@ -177,6 +163,11 @@ impl amba::Driver for PL011Device {
         dbg!("********* PL061 GPIO chip registered *********\n");
         Ok(())
     }
+
+    fn remove(_data: &Self::Data) {
+        dbg!("********* PL061 GPIO chip removed *********\n");
+        // unsafe { bindings::uart_remove_one_port(&UART_DRIVER, port) };
+    }
 }
 
 module_amba_driver! {
@@ -197,15 +188,221 @@ fn pl011_find_free_port() -> Result<usize>{
     return Err(EBUSY);
 }
 
+fn pl011_unregister_port(portnr: usize) {
+    let mut i = 0;
+    let mut busy = false;
+    for (index, port) in unsafe { PORTS.iter().enumerate() } {
+        if let Some(port) = port {
+            if index == portnr {
+                busy = true;
+                break;
+            }
+        }
+        i += 1;
+    }
+}
+
 /// pl011 register write
 fn pl011_write(val:u32, membase: *mut u8, reg: usize, iotype: u8) {
     let addr = membase.wrapping_add(reg);
     if iotype == UPIO_MEM32 as u8 {
-        unsafe {bindings::writel_relaxed(val as _, addr as _)};
+        unsafe { bindings::writel_relaxed(val as _, addr as _) };
     } else {
-        unsafe { bindings::writew_relaxed(val as _, addr as _)};
+        unsafe { bindings::writew_relaxed(val as _, addr as _) };
     }
 
 }
 
+/// pl011 register read
+fn pl011_read(membase: *mut u8, reg: usize, iotype: u8) -> u32 {
+    let addr = membase.wrapping_add(reg);
+    if iotype == UPIO_MEM32 as u8 {
+        unsafe { bindings::readl_relaxed(addr as _) as _ }
+    } else {
+        unsafe { bindings::readw_relaxed(addr as _) as _ }
+    }
+}
 
+struct PL011PortOps;
+
+#[vtable]
+impl UartPortOps for PL011PortOps {
+
+    #[doc = " User data that will be accessible to all operations"]
+    type Data = Arc<PL011Data>;
+
+    #[doc = " * @tx_empty:      check if the UART TX FIFO is empty"]
+    fn tx_empty(_port: &UartPort) -> u32 {
+        let port = unsafe { *_port.as_ptr() };
+        let status = pl011_read(port.membase, UART01X_FR as usize, port.iotype);
+        if status & UART01X_FR_TXFF != 0 {
+            bindings::TIOCSER_TEMT
+        } else {
+            0
+        }
+    }
+
+    #[doc = " * @set_mctrl:    set the modem control register"]
+    fn set_mctrl(_port: &UartPort,mctrl:u32) {
+        let port = unsafe { *_port.as_ptr() };
+        let mut cr = pl011_read(port.membase, UART010_CR as usize, port.iotype);
+
+        let mut TIOCMBIT = |tiocmbit: u32, uartbit: u32| {
+            if mctrl & tiocmbit != 0 {
+                cr |= uartbit;
+            } else {
+                cr &= !uartbit;
+            }
+        };
+        TIOCMBIT(bindings::TIOCM_RTS, UART011_CR_RTS);
+        TIOCMBIT(bindings::TIOCM_DTR, UART011_CR_DTR);
+        TIOCMBIT(bindings::TIOCM_OUT1, UART011_CR_OUT1);
+        TIOCMBIT(bindings::TIOCM_OUT2, UART011_CR_OUT2);
+        TIOCMBIT(bindings::TIOCM_LOOP, UART011_CR_LBE);
+
+        if port.status & UPSTAT_AUTOCTS != 0 {
+            TIOCMBIT(bindings::TIOCM_RTS, UART011_CR_RTSEN);
+        }
+
+        pl011_write(cr, port.membase, UART011_CR as usize, port.iotype)
+    }
+
+    #[doc = " * @get_mctrl:    get the modem control register"]
+    fn get_mctrl(_port: &UartPort) -> u32 {
+        let port = unsafe { *_port.as_ptr() };
+        let mut result = 0;
+        let status = pl011_read(port.membase, UART01X_FR as usize, port.iotype);
+
+        let mut TIOCMBIT = |uartbit: u32, tiocmbit: u32| {
+            if status & uartbit != 0 {
+                result |= tiocmbit;
+            }
+        };
+        TIOCMBIT(UART01X_FR_DCD, bindings::TIOCM_CAR);
+        TIOCMBIT(VENDOR_DATA.fr_dsr, bindings::TIOCM_DSR);
+        TIOCMBIT(VENDOR_DATA.fr_cts, bindings::TIOCM_CTS);
+        TIOCMBIT(VENDOR_DATA.fr_ri, bindings::TIOCM_RNG);
+
+        return result;
+    }
+
+    #[doc = " * @stop_tx:      stop transmitting"]
+    fn stop_tx(_port: &UartPort) {
+        let a = &self::Data;
+    }
+
+    #[doc = " * @start_tx:    start transmitting"]
+    fn start_tx(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @throttle:     stop receiving"]
+    fn throttle(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @unthrottle:   start receiving"]
+    fn unthrottle(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @send_xchar:  send a break character"]
+    fn send_xchar(_port: &UartPort,ch:i8) {
+       todo!()
+    }
+
+    #[doc = " * @stop_rx:      stop receiving"]
+    fn stop_rx(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @start_rx:    start receiving"]
+    fn start_rx(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @enable_ms:    enable modem status interrupts"]
+    fn enable_ms(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @break_ctl:   set the break control"]
+    fn break_ctl(_port: &UartPort,ctl:i32) {
+        todo!()
+    }
+
+    #[doc = " * @startup:      start the UART"]
+    fn startup(_port: &UartPort) -> i32 {
+        todo!()
+    }
+
+    #[doc = " * @shutdown:     shutdown the UART"]
+    fn shutdown(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @flush_buffer: flush the UART buffer"]
+    fn flush_buffer(_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @set_termios: set the termios structure"]
+    fn set_termios(_port: &UartPort,_new: *mut bindings::ktermios,_old: *const bindings::ktermios,) {
+        todo!()
+    }
+
+    #[doc = " * @set_ldisc:    set the line discipline"]
+    fn set_ldisc(_port: &UartPort,_arg2: *mut bindings::ktermios) {
+        todo!()
+    }
+
+    #[doc = " * @pm:            power management"]
+    fn pm(_port: &UartPort,_state:u32,_oldstate:u32) {
+        todo!()
+    }
+
+    #[doc = " * @type:          get the type of the UART"]
+    fn port_type(_port: &UartPort) ->  *const i8 {
+        todo!()
+    }
+
+    #[doc = " * @release_port: release the UART port"]
+    fn release_port(uart_port: &UartPort) {
+        todo!()
+    }
+
+    #[doc = " * @request_port: request the UART port"]
+    fn request_port(uart_port: &UartPort) -> i32 {
+        todo!()
+    }
+
+    #[doc = " * @config_port:  configure the UART port"]
+    fn config_port(uart_port: &UartPort,flags:i32) {
+        todo!()
+    }
+
+    #[doc = " * @verify_port:  verify the UART port"]
+    fn verify_port(uart_port: &UartPort,ser: *mut bindings::serial_struct) -> i32 {
+        todo!()
+    }
+
+    #[doc = " * @ioctl:        ioctl handler"]
+    fn ioctl(uart_port: &UartPort,arg2:u32,arg3:u64) -> i32 {
+        todo!()
+    }
+
+    #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
+    fn poll_init(uart_port: &UartPort) -> i32 {
+        todo!()
+    }
+
+    #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
+    fn poll_put_char(uart_port: &UartPort,arg2:u8) {
+        todo!()
+    }
+
+    #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
+    fn poll_get_char(uart_port: &UartPort) -> i32 {
+        todo!()
+    }
+}

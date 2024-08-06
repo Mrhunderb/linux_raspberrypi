@@ -9,7 +9,7 @@ use core::ops::Deref;
 use kernel::{
     amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{PortRegistration, UartPort, UartPortOps}
-    }, sync::Arc, sync::ArcBorrow,
+    }, sync::{Arc, ArcBorrow, SpinLock},
 };
 
 const UART_SIZE: usize = 0x200;
@@ -249,21 +249,21 @@ impl UartPortOps for PL011PortOps {
         let port = unsafe { *_port.as_ptr() };
         let mut cr = pl011_read(port.membase, UART010_CR as usize, port.iotype);
 
-        let mut TIOCMBIT = |tiocmbit: u32, uartbit: u32| {
+        let mut tiocmbit = |tiocmbit: u32, uartbit: u32| {
             if mctrl & tiocmbit != 0 {
                 cr |= uartbit;
             } else {
                 cr &= !uartbit;
             }
         };
-        TIOCMBIT(bindings::TIOCM_RTS, UART011_CR_RTS);
-        TIOCMBIT(bindings::TIOCM_DTR, UART011_CR_DTR);
-        TIOCMBIT(bindings::TIOCM_OUT1, UART011_CR_OUT1);
-        TIOCMBIT(bindings::TIOCM_OUT2, UART011_CR_OUT2);
-        TIOCMBIT(bindings::TIOCM_LOOP, UART011_CR_LBE);
+        tiocmbit(bindings::TIOCM_RTS, UART011_CR_RTS);
+        tiocmbit(bindings::TIOCM_DTR, UART011_CR_DTR);
+        tiocmbit(bindings::TIOCM_OUT1, UART011_CR_OUT1);
+        tiocmbit(bindings::TIOCM_OUT2, UART011_CR_OUT2);
+        tiocmbit(bindings::TIOCM_LOOP, UART011_CR_LBE);
 
         if port.status & UPSTAT_AUTOCTS != 0 {
-            TIOCMBIT(bindings::TIOCM_RTS, UART011_CR_RTSEN);
+            tiocmbit(bindings::TIOCM_RTS, UART011_CR_RTSEN);
         }
 
         pl011_write(cr, port.membase, UART011_CR as usize, port.iotype)
@@ -275,15 +275,15 @@ impl UartPortOps for PL011PortOps {
         let mut result = 0;
         let status = pl011_read(port.membase, UART01X_FR as usize, port.iotype);
 
-        let mut TIOCMBIT = |uartbit: u32, tiocmbit: u32| {
+        let mut tiocmbit = |uartbit: u32, tiocmbit: u32| {
             if status & uartbit != 0 {
                 result |= tiocmbit;
             }
         };
-        TIOCMBIT(UART01X_FR_DCD, bindings::TIOCM_CAR);
-        TIOCMBIT(VENDOR_DATA.fr_dsr, bindings::TIOCM_DSR);
-        TIOCMBIT(VENDOR_DATA.fr_cts, bindings::TIOCM_CTS);
-        TIOCMBIT(VENDOR_DATA.fr_ri, bindings::TIOCM_RNG);
+        tiocmbit(UART01X_FR_DCD, bindings::TIOCM_CAR);
+        tiocmbit(VENDOR_DATA.fr_dsr, bindings::TIOCM_DSR);
+        tiocmbit(VENDOR_DATA.fr_cts, bindings::TIOCM_CTS);
+        tiocmbit(VENDOR_DATA.fr_ri, bindings::TIOCM_RNG);
 
         return result;
     }
@@ -304,9 +304,10 @@ impl UartPortOps for PL011PortOps {
     #[doc = " * @throttle:     stop receiving"]
     fn throttle(&_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         let mut port = unsafe { *_port.as_ptr() };
-        unsafe { bindings::spin_lock(&mut port.lock) }
+        let flags: u64 = 0;
+        unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
         PL011PortOps::stop_rx(&_port, data);
-        unsafe { bindings::spin_unlock(&mut port.lock) }
+        unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
     #[doc = " * @unthrottle:   start receiving"]

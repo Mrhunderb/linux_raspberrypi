@@ -4,10 +4,12 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
+use core::ops::Deref;
+
 use kernel::{
     amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{PortRegistration, UartPort, UartPortOps}
-    }, sync::Arc
+    }, sync::Arc, sync::ArcBorrow,
 };
 
 const UART_SIZE: usize = 0x200;
@@ -229,7 +231,7 @@ struct PL011PortOps;
 impl UartPortOps for PL011PortOps {
 
     #[doc = " User data that will be accessible to all operations"]
-    type Data = Arc<PL011Data>;
+    type Data = ArcBorrow<'_, PL011Data>;
 
     #[doc = " * @tx_empty:      check if the UART TX FIFO is empty"]
     fn tx_empty(_port: &UartPort) -> u32 {
@@ -287,22 +289,26 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @stop_tx:      stop transmitting"]
-    fn stop_tx(_port: &UartPort) {
-        let a = &self::Data;
+    fn stop_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+        let port = unsafe { *_port.as_ptr() };
+        let mut pl011_data = *data.deref();
+        pl011_data.im &= !UART011_TXIM;
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
     }
 
     #[doc = " * @start_tx:    start transmitting"]
-    fn start_tx(_port: &UartPort) {
-        todo!()
+    fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+        let port = unsafe { *_port.as_ptr() };
+        let mut pl011_data = *data.deref();
     }
 
     #[doc = " * @throttle:     stop receiving"]
-    fn throttle(_port: &UartPort) {
+    fn throttle(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         todo!()
     }
 
     #[doc = " * @unthrottle:   start receiving"]
-    fn unthrottle(_port: &UartPort) {
+    fn unthrottle(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         todo!()
     }
 

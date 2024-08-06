@@ -40,7 +40,7 @@ pub trait UartPortOps {
     fn get_mctrl(_port: &UartPort) -> u32;
 
     /// * @stop_tx:      stop transmitting
-    fn stop_tx(_port: &UartPort);
+    fn stop_tx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
 
     /// * @start_tx:    start transmitting
     fn start_tx(_port: &UartPort);
@@ -276,7 +276,8 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn stop_tx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        T::stop_tx(port)
+        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::stop_tx(port, data)
     }
 
     unsafe extern "C" fn start_tx_callback(uart_port: *mut bindings::uart_port) {

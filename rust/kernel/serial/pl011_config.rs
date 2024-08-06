@@ -84,6 +84,18 @@ pub const UART011_IFLS_TX4_8: u32 = 2 << 0;
 pub const UART011_IFLS_TX6_8: u32 = 3 << 0;
 pub const UART011_IFLS_TX7_8: u32 = 4 << 0;
 
+pub const UART011_OEIM:	u32 = 1 << 10;	/* overrun error interrupt mask */
+pub const UART011_BEIM:	u32 = 1 << 9;	/* break error interrupt mask */
+pub const UART011_PEIM:	u32 = 1 << 8;	/* parity error interrupt mask */
+pub const UART011_FEIM:	u32 = 1 << 7;	/* framing error interrupt mask */
+pub const UART011_RTIM:	u32 = 1 << 6;	/* receive timeout interrupt mask */
+pub const UART011_TXIM:	u32 = 1 << 5;	/* transmit interrupt mask */
+pub const UART011_RXIM:	u32 = 1 << 4;	/* receive interrupt mask */
+pub const UART011_DSRMIM: u32 = 1 << 3;	/* DSR interrupt mask */
+pub const UART011_DCDMIM: u32 = 1 << 2;	/* DCD interrupt mask */
+pub const UART011_CTSMIM: u32 = 1 << 1;	/* CTS interrupt mask */
+pub const UART011_RIMIM: u32 = 1 << 0;	/* RI interrupt mask */
+
 pub const UART011_FR_RI: u32 = 0x100;
 pub const UART011_FR_TXFE: u32 = 0x080;
 pub const UART011_FR_RXFF: u32 = 0x040;
@@ -138,12 +150,12 @@ pub const UART01X_CR_UARTEN: u32 =	0x0001;
  * Must hold termios_rwsem, port mutex and port lock to change;
  * can hold any one lock to read.
  */
-pub const UPSTAT_CTS_ENABLE: u32 = (1 << 0);
-pub const UPSTAT_DCD_ENABLE: u32 =  (1 << 1);
-pub const UPSTAT_AUTORTS: u32 = (1 << 2);
-pub const UPSTAT_AUTOCTS: u32 = (1 << 3);
-pub const UPSTAT_AUTOXOFF: u32 = (1 << 4);
-pub const UPSTAT_SYNC_FIFO: u32 = (1 << 5);
+pub const UPSTAT_CTS_ENABLE: u32 = 1 << 0;
+pub const UPSTAT_DCD_ENABLE: u32 = 1 << 1;
+pub const UPSTAT_AUTORTS: u32 = 1 << 2;
+pub const UPSTAT_AUTOCTS: u32 = 1 << 3;
+pub const UPSTAT_AUTOXOFF: u32 = 1 << 4;
+pub const UPSTAT_SYNC_FIFO: u32 = 1 << 5;
 
 #[derive(Default, Copy, Clone)]
 pub struct VendorData {

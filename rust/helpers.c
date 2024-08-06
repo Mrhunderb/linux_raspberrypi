@@ -402,6 +402,18 @@ void rust_helper_clk_disable_unprepare(struct clk *clk)
 }
 EXPORT_SYMBOL_GPL(rust_helper_clk_disable_unprepare);
 
+void rust_helper_spin_lock_irqsave(spinlock_t *lock, unsigned long flags)
+{
+	spin_lock_irqsave(lock, flags);
+}
+EXPORT_SYMBOL_GPL(rust_helper_spin_lock_irqsave);
+
+void rust_helper_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
+{
+	spin_unlock_irqrestore(lock, flags);
+}
+EXPORT_SYMBOL_GPL(rust_helper_spin_unlock_irqrestore);
+
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
  * use it in contexts where Rust expects a `usize` like slice (array) indices.

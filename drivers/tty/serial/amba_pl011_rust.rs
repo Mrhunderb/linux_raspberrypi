@@ -231,7 +231,7 @@ struct PL011PortOps;
 impl UartPortOps for PL011PortOps {
 
     #[doc = " User data that will be accessible to all operations"]
-    type Data = ArcBorrow<'_, PL011Data>;
+    type Data = Arc<PL011Data>;
 
     #[doc = " * @tx_empty:      check if the UART TX FIFO is empty"]
     fn tx_empty(_port: &UartPort) -> u32 {
@@ -298,13 +298,15 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @start_tx:    start transmitting"]
     fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        let port = unsafe { *_port.as_ptr() };
-        let mut pl011_data = *data.deref();
+        todo!()
     }
 
     #[doc = " * @throttle:     stop receiving"]
-    fn throttle(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        todo!()
+    fn throttle(&_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+        let mut port = unsafe { *_port.as_ptr() };
+        unsafe { bindings::spin_lock(&mut port.lock) }
+        PL011PortOps::stop_rx(&_port, data);
+        unsafe { bindings::spin_unlock(&mut port.lock) }
     }
 
     #[doc = " * @unthrottle:   start receiving"]
@@ -318,17 +320,21 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @stop_rx:      stop receiving"]
-    fn stop_rx(_port: &UartPort) {
-        todo!()
+    fn stop_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+        let mut port = unsafe { *_port.as_ptr() };
+        let mut pl011_data = *data.deref();
+        pl011_data.im &= !(UART011_RXIM | UART011_RTIM | UART011_FEIM | 
+                        UART011_PEIM | UART011_BEIM | UART011_OEIM);
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC, port.iotype)
     }
 
     #[doc = " * @start_rx:    start receiving"]
-    fn start_rx(_port: &UartPort) {
+    fn start_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         todo!()
     }
 
     #[doc = " * @enable_ms:    enable modem status interrupts"]
-    fn enable_ms(_port: &UartPort) {
+    fn enable_ms(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         todo!()
     }
 

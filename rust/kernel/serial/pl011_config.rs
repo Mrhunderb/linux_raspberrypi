@@ -157,6 +157,17 @@ pub const UPSTAT_AUTOCTS: u32 = 1 << 3;
 pub const UPSTAT_AUTOXOFF: u32 = 1 << 4;
 pub const UPSTAT_SYNC_FIFO: u32 = 1 << 5;
 
+
+pub const SER_RS485_ENABLED: u32 = 1 << 0;
+pub const SER_RS485_RTS_ON_SEND: u32 = 1 << 1;
+pub const SER_RS485_RTS_AFTER_SEND: u32 = 1 << 2;
+pub const SER_RS485_RX_DURING_TX: u32 = 1 << 4;
+pub const SER_RS485_TERMINATE_BUS: u32 = 1 << 5;
+pub const SER_RS485_ADDRB: u32 = 1 << 6;
+pub const SER_RS485_ADDR_RECV: u32 = 1 << 7;
+pub const SER_RS485_ADDR_DEST: u32 = 1 << 8;
+
+
 #[derive(Default, Copy, Clone)]
 pub struct VendorData {
     pub ifls: u32,

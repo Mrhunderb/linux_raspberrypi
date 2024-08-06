@@ -298,7 +298,7 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @start_tx:    start transmitting"]
     fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        todo!()
+        let mut port = unsafe { *_port.as_ptr() };
     }
 
     #[doc = " * @throttle:     stop receiving"]
@@ -312,7 +312,16 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @unthrottle:   start receiving"]
     fn unthrottle(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        todo!()
+        let mut port = unsafe { *_port.as_ptr() };
+        let mut pl011_data = *data.deref();
+        let flags: u64 = 0;
+
+        unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
+
+        pl011_data.im = UART011_RTIM | UART011_RXIM;
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype);
+
+        unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
     #[doc = " * @send_xchar:  send a break character"]
@@ -343,8 +352,19 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @break_ctl:   set the break control"]
-    fn break_ctl(_port: &UartPort,ctl:i32) {
-        todo!()
+    fn break_ctl(_port: &UartPort, ctl:i32) {
+        let mut port = unsafe { *_port.as_ptr() };
+        let flags: u64 = 0;
+
+        unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
+        let mut lcr_h = pl011_read(port.membase, ST_UART011_LCRH_TX as usize, port.iotype);
+        if ctl == -1 {
+            lcr_h |= UART01X_LCRH_BRK;
+        } else {
+            lcr_h &= !UART01X_LCRH_BRK;
+        }
+        pl011_write(lcr_h, port.membase, UART011_LCRH as usize, port.iotype);
+        unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
     #[doc = " * @startup:      start the UART"]

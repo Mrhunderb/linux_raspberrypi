@@ -96,6 +96,18 @@ pub const UART011_DCDMIM: u32 = 1 << 2;	/* DCD interrupt mask */
 pub const UART011_CTSMIM: u32 = 1 << 1;	/* CTS interrupt mask */
 pub const UART011_RIMIM: u32 = 1 << 0;	/* RI interrupt mask */
 
+ 
+pub const UART011_LCRH_SPS: u32 = 0x80;
+pub const UART01X_LCRH_WLEN_8: u32 = 0x60;
+pub const UART01X_LCRH_WLEN_7: u32 = 0x40;
+pub const UART01X_LCRH_WLEN_6: u32 = 0x20;
+pub const UART01X_LCRH_WLEN_5: u32 = 0x00;
+pub const UART01X_LCRH_FEN: u32 = 0x10;
+pub const UART01X_LCRH_STP2: u32 = 0x08;
+pub const UART01X_LCRH_EPS: u32 = 0x04;
+pub const UART01X_LCRH_PEN: u32 = 0x02;
+pub const UART01X_LCRH_BRK: u32 = 0x01;
+
 pub const UART011_FR_RI: u32 = 0x100;
 pub const UART011_FR_TXFE: u32 = 0x080;
 pub const UART011_FR_RXFF: u32 = 0x040;

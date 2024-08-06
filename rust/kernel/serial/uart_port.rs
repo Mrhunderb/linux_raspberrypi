@@ -61,7 +61,7 @@ pub trait UartPortOps {
     fn start_rx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
 
     /// * @enable_ms:    enable modem status interrupts
-    fn enable_ms(_port: &UartPort);
+    fn enable_ms(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
 
     /// * @break_ctl:   set the break control
     fn break_ctl(_port: &UartPort, ctl: i32);
@@ -324,7 +324,8 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn enable_ms_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        T::enable_ms(port)
+        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::enable_ms(port, data)
     }
 
     unsafe extern "C" fn break_ctl_callback(uart_port: *mut bindings::uart_port, ctl: core::ffi::c_int) {

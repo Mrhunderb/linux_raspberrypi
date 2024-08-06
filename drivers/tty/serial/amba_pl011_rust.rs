@@ -325,7 +325,7 @@ impl UartPortOps for PL011PortOps {
         let mut pl011_data = *data.deref();
         pl011_data.im &= !(UART011_RXIM | UART011_RTIM | UART011_FEIM | 
                         UART011_PEIM | UART011_BEIM | UART011_OEIM);
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC, port.iotype)
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
     }
 
     #[doc = " * @start_rx:    start receiving"]
@@ -335,7 +335,10 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @enable_ms:    enable modem status interrupts"]
     fn enable_ms(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        todo!()
+        let mut port = unsafe { *_port.as_ptr() };
+        let mut pl011_data = *data.deref();
+        pl011_data.im |= UART011_RIMIM | UART011_CTSMIM | UART011_DCDMIM | UART011_DSRMIM;
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
     }
 
     #[doc = " * @break_ctl:   set the break control"]

@@ -20,6 +20,8 @@
  * Sorted alphabetically.
  */
 
+#include "linux/compiler.h"
+#include "linux/types.h"
 #include <kunit/test-bug.h>
 #include <linux/bug.h>
 #include <linux/build_bug.h>
@@ -413,6 +415,24 @@ void rust_helper_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 	spin_unlock_irqrestore(lock, flags);
 }
 EXPORT_SYMBOL_GPL(rust_helper_spin_unlock_irqrestore);
+
+bool rust_helper_likely(bool x)
+{
+	return likely(x);
+}
+EXPORT_SYMBOL_GPL(rust_helper_likely);
+
+bool rust_helper_unlikely(bool x)
+{
+	return unlikely(x);
+}
+EXPORT_SYMBOL_GPL(rust_helper_unlikely);
+
+void rust_helper_mb(void)
+{
+	mb();
+}
+EXPORT_SYMBOL_GPL(rust_helper_mb);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

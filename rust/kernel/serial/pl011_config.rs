@@ -180,6 +180,9 @@ pub const SER_RS485_ADDR_RECV: u32 = 1 << 7;
 pub const SER_RS485_ADDR_DEST: u32 = 1 << 8;
 
 
+pub const PAGE_SIZE: u32 = 1 << bindings::PAGE_SHIFT;
+pub const UART_XMIT_SIZE: i32 = PAGE_SIZE as i32;
+
 #[derive(Default, Copy, Clone)]
 pub struct VendorData {
     pub ifls: u32,

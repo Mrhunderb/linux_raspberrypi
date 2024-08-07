@@ -4,12 +4,12 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::ops::Deref;
+use core::{borrow::BorrowMut, convert::AsRef, ops::{Deref, DerefMut}};
 
 use kernel::{
-    amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
-        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{PortRegistration, UartPort, UartPortOps}
-    }, sync::{Arc, ArcBorrow, SpinLock},
+    amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
+        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
+    }, sync::{Arc, ArcBorrow, SpinLock}
 };
 
 const UART_SIZE: usize = 0x200;
@@ -107,6 +107,7 @@ struct PL011Data {
     fifosize: u32,
     fixed_baud:u32,
     type_ : u32,
+    rs485_tx_started: bool,
     // vendor: VendorData,
 }
 
@@ -225,6 +226,99 @@ fn pl011_read(membase: *mut u8, reg: usize, iotype: u8) -> u32 {
     }
 }
 
+fn pl011_tx_char(port: &UartPort, c: u8, from_irq: bool) -> bool {
+    let mut pl011_port = unsafe { *port.as_ptr() };
+    if unsafe { bindings::unlikely(!from_irq) } && 
+        pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) != 0 {
+            return false;
+    }
+    pl011_write(c as u32, pl011_port.membase, UART01X_DR as usize, pl011_port.iotype);
+    unsafe { bindings::mb() };
+    pl011_port.icount.tx += 1;
+    return true;
+}
+
+fn pl011_tx_chars(port: &UartPort,  data: ArcBorrow<'_, PL011Data>, from_irq: bool) -> bool {
+    let mut pl011_port = unsafe { *port.as_ptr() };
+    let mut xmit = unsafe{ (*pl011_port.state).xmit };
+    let mut count = pl011_port.fifosize >> 1;
+
+    if pl011_port.x_char != 0 {
+        if !pl011_tx_char(port, pl011_port.x_char, from_irq) {
+            return true;
+        }
+        pl011_port.x_char = 0;
+        count -= 1;
+    }
+    // TODO: Implement uart_tx_stopped
+    if uart_circ_empty(&xmit) {
+        PL011PortOps::stop_tx(port, data);
+        return false;
+    }
+
+    loop {
+        let cond = unsafe { bindings::likely(from_irq) };
+        count -= 1;
+        if cond && count+1 == 0 {
+            break;
+        }
+        if cond && count == 0 &&
+            pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) != 0 {
+            break;
+        }
+        // let c = xmit.buf.wrapping_add(xmit.tail as usize) as u8;
+        let c = unsafe { *xmit.buf.wrapping_add(xmit.tail as usize) };
+        if pl011_tx_char(port, c as u8, from_irq) {
+            break;
+        }
+    
+        xmit.tail = (xmit.tail + 1) & (UART_XMIT_SIZE - 1);
+        if uart_circ_empty(&xmit) {
+            break;
+        }
+    }
+
+    return true;
+
+}
+
+fn pl011_rs485_tx_start(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    let pl011_port = unsafe { *port.as_ptr() };
+    let mut pl011_data = *data.deref();
+
+	/* Enable transmitter */
+    let mut cr: u32 = pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+    cr |= UART011_CR_TXE;
+
+	/* Disable receiver if half-duplex */
+    if pl011_port.rs485.flags & bindings::SER_RS485_RX_DURING_TX == 0 {
+        cr &= !UART011_CR_RXE;
+    }
+
+    if pl011_port.rs485.flags & bindings::SER_RS485_RTS_ON_SEND != 0 {
+        cr |= UART011_CR_RTS;
+    } else {
+        cr &= !UART011_CR_RTS;
+    }
+
+    pl011_write(cr, pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+
+    if pl011_port.rs485.delay_rts_after_send != 0{
+        unsafe { bindings::msleep(pl011_port.rs485.delay_rts_after_send) };
+    }
+
+    pl011_data.rs485_tx_started = true;
+}
+
+fn pl011_start_tx_pio(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    let pl011_port = unsafe { *port.as_ptr() };
+    let mut pl011_data = *data.deref();
+    if pl011_tx_chars(port, data, false) {
+        pl011_data.im |= UART011_TXIM;
+        pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+    }
+}
+
 struct PL011PortOps;
 
 #[vtable]
@@ -293,12 +387,19 @@ impl UartPortOps for PL011PortOps {
         let port = unsafe { *_port.as_ptr() };
         let mut pl011_data = *data.deref();
         pl011_data.im &= !UART011_TXIM;
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
+        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype);
     }
 
     #[doc = " * @start_tx:    start transmitting"]
     fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         let mut port = unsafe { *_port.as_ptr() };
+        let pl011_data = *data.deref();
+
+        if (port.rs485.flags & bindings::SER_RS485_ENABLED != 0) && 
+            !pl011_data.rs485_tx_started {
+            pl011_rs485_tx_start(_port, data);
+        } 
+        pl011_start_tx_pio(_port, data);
     }
 
     #[doc = " * @throttle:     stop receiving"]

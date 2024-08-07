@@ -12,14 +12,11 @@ use crate::{
     error::{code::*, Result}, 
     device, 
     pr_err, pr_warn, 
-    types::ForeignOwnable
+    types::ForeignOwnable,
 };
 
 use core::{ 
-    ffi::c_void,
-    marker::{PhantomData, PhantomPinned},
-    pin::Pin,
-    mem::MaybeUninit,
+    ffi::c_void, marker::{PhantomData, PhantomPinned}, mem::MaybeUninit, pin::Pin
 };
 
 use macros::vtable;
@@ -477,4 +474,8 @@ impl<T: UartPortOps> Adapter<T> {
     const fn build() -> &'static bindings::uart_ops {
         &Self::VTABLE
     }
+}
+
+pub fn uart_circ_empty(circ: &bindings::circ_buf) -> bool {
+    circ.head == circ.tail
 }

@@ -4,12 +4,12 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{borrow::BorrowMut, convert::AsRef, ops::{Deref, DerefMut}};
+use core::{clone::Clone, ops::Deref};
 
 use kernel::{
-    amba, bindings, c_str, clk::Clk, define_amba_id_table, device::{self, Data}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
+    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
-    }, sync::{Arc, ArcBorrow, SpinLock}
+    }, sync::{Arc, ArcBorrow}
 };
 
 const UART_SIZE: usize = 0x200;
@@ -191,20 +191,6 @@ fn pl011_find_free_port() -> Result<usize>{
     return Err(EBUSY);
 }
 
-fn pl011_unregister_port(portnr: usize) {
-    let mut i = 0;
-    let mut busy = false;
-    for (index, port) in unsafe { PORTS.iter().enumerate() } {
-        if let Some(port) = port {
-            if index == portnr {
-                busy = true;
-                break;
-            }
-        }
-        i += 1;
-    }
-}
-
 /// pl011 register write
 fn pl011_write(val:u32, membase: *mut u8, reg: usize, iotype: u8) {
     let addr = membase.wrapping_add(reg);
@@ -315,7 +301,7 @@ fn pl011_start_tx_pio(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
     let mut pl011_data = *data.deref();
     if pl011_tx_chars(port, data, false) {
         pl011_data.im |= UART011_TXIM;
-        pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+        pl011_write(pl011_data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
     }
 }
 
@@ -385,19 +371,19 @@ impl UartPortOps for PL011PortOps {
     #[doc = " * @stop_tx:      stop transmitting"]
     fn stop_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         let port = unsafe { *_port.as_ptr() };
-        let mut pl011_data = *data.deref();
+        let mut pl011_data  = *data.deref();
         pl011_data.im &= !UART011_TXIM;
         pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype);
     }
 
     #[doc = " * @start_tx:    start transmitting"]
     fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        let mut port = unsafe { *_port.as_ptr() };
+        let port = unsafe { *_port.as_ptr() };
         let pl011_data = *data.deref();
 
         if (port.rs485.flags & bindings::SER_RS485_ENABLED != 0) && 
             !pl011_data.rs485_tx_started {
-            pl011_rs485_tx_start(_port, data);
+            pl011_rs485_tx_start(_port, data.clone());
         } 
         pl011_start_tx_pio(_port, data);
     }
@@ -427,12 +413,11 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @send_xchar:  send a break character"]
     fn send_xchar(_port: &UartPort,ch:i8) {
-       todo!()
     }
 
     #[doc = " * @stop_rx:      stop receiving"]
     fn stop_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        let mut port = unsafe { *_port.as_ptr() };
+        let port = unsafe { *_port.as_ptr() };
         let mut pl011_data = *data.deref();
         pl011_data.im &= !(UART011_RXIM | UART011_RTIM | UART011_FEIM | 
                         UART011_PEIM | UART011_BEIM | UART011_OEIM);
@@ -441,12 +426,11 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @start_rx:    start receiving"]
     fn start_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        todo!()
     }
 
     #[doc = " * @enable_ms:    enable modem status interrupts"]
     fn enable_ms(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
-        let mut port = unsafe { *_port.as_ptr() };
+        let port = unsafe { *_port.as_ptr() };
         let mut pl011_data = *data.deref();
         pl011_data.im |= UART011_RIMIM | UART011_CTSMIM | UART011_DCDMIM | UART011_DSRMIM;
         pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
@@ -470,6 +454,7 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @startup:      start the UART"]
     fn startup(_port: &UartPort) -> i32 {
+        let port = unsafe { *_port.as_ptr() };
         todo!()
     }
 
@@ -530,6 +515,10 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
     fn poll_init(uart_port: &UartPort) -> i32 {
+        let port = unsafe { *uart_port.as_ptr() };
+        // TODO: Implement uart_poll_init
+
+        // let retval = unsafe { bindings::clk_prepare_enable(port.clk) };
         todo!()
     }
 

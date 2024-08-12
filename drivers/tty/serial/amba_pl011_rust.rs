@@ -9,7 +9,7 @@ use core::{clone::Clone, ops::Deref};
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
-    }, sync::{Arc, ArcBorrow}
+    }, sync::{Arc, ArcBorrow}, types::ForeignOwnable
 };
 
 const UART_SIZE: usize = 0x200;
@@ -224,7 +224,7 @@ fn pl011_tx_char(port: &UartPort, c: u8, from_irq: bool) -> bool {
     return true;
 }
 
-fn pl011_tx_chars(port: &UartPort,  data: ArcBorrow<'_, PL011Data>, from_irq: bool) -> bool {
+fn pl011_tx_chars(port: &UartPort,  data: &mut Box<PL011Data>, from_irq: bool) -> bool {
     let mut pl011_port = unsafe { *port.as_ptr() };
     let mut xmit = unsafe{ (*pl011_port.state).xmit };
     let mut count = pl011_port.fifosize >> 1;
@@ -268,9 +268,8 @@ fn pl011_tx_chars(port: &UartPort,  data: ArcBorrow<'_, PL011Data>, from_irq: bo
 
 }
 
-fn pl011_rs485_tx_start(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+fn pl011_rs485_tx_start(port: &UartPort, data: &mut Box<PL011Data>) {
     let pl011_port = unsafe { *port.as_ptr() };
-    let mut pl011_data = *data.deref();
 
 	/* Enable transmitter */
     let mut cr: u32 = pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
@@ -293,15 +292,14 @@ fn pl011_rs485_tx_start(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
         unsafe { bindings::msleep(pl011_port.rs485.delay_rts_after_send) };
     }
 
-    pl011_data.rs485_tx_started = true;
+    data.rs485_tx_started = true;
 }
 
-fn pl011_start_tx_pio(port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+fn pl011_start_tx_pio(port: &UartPort, data: &mut Box<PL011Data>) {
     let pl011_port = unsafe { *port.as_ptr() };
-    let mut pl011_data = *data.deref();
     if pl011_tx_chars(port, data, false) {
-        pl011_data.im |= UART011_TXIM;
-        pl011_write(pl011_data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+        data.im |= UART011_TXIM;
+        pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
     }
 }
 
@@ -311,7 +309,7 @@ struct PL011PortOps;
 impl UartPortOps for PL011PortOps {
 
     #[doc = " User data that will be accessible to all operations"]
-    type Data = Arc<PL011Data>;
+    type Data = Box<PL011Data>;
 
     #[doc = " * @tx_empty:      check if the UART TX FIFO is empty"]
     fn tx_empty(_port: &UartPort) -> u32 {
@@ -325,7 +323,7 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @set_mctrl:    set the modem control register"]
-    fn set_mctrl(_port: &UartPort,mctrl:u32) {
+    fn set_mctrl(_port: &UartPort, mctrl:u32) {
         let port = unsafe { *_port.as_ptr() };
         let mut cr = pl011_read(port.membase, UART010_CR as usize, port.iotype);
 
@@ -369,44 +367,41 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @stop_tx:      stop transmitting"]
-    fn stop_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn stop_tx(_port: &UartPort, data: &mut Self::Data) {
         let port = unsafe { *_port.as_ptr() };
-        let mut pl011_data  = *data.deref();
-        pl011_data.im &= !UART011_TXIM;
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype);
+        data.im &= !UART011_TXIM;
+        pl011_write(data.im, port.membase, UART011_IMSC as usize, port.iotype);
     }
 
     #[doc = " * @start_tx:    start transmitting"]
-    fn start_tx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn start_tx(_port: &UartPort, data: &mut Self::Data) {
         let port = unsafe { *_port.as_ptr() };
-        let pl011_data = *data.deref();
 
         if (port.rs485.flags & bindings::SER_RS485_ENABLED != 0) && 
-            !pl011_data.rs485_tx_started {
-            pl011_rs485_tx_start(_port, data.clone());
+            !data.rs485_tx_started {
+            pl011_rs485_tx_start(_port, data);
         } 
         pl011_start_tx_pio(_port, data);
     }
 
     #[doc = " * @throttle:     stop receiving"]
-    fn throttle(&_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn throttle(&_port: &UartPort, data: &mut Self::Data) {
         let mut port = unsafe { *_port.as_ptr() };
         let flags: u64 = 0;
         unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
-        PL011PortOps::stop_rx(&_port, data);
+        // PL011PortOps::stop_rx(&_port, &mut data);
         unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
     #[doc = " * @unthrottle:   start receiving"]
-    fn unthrottle(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn unthrottle(_port: &UartPort, data: &mut Self::Data) {
         let mut port = unsafe { *_port.as_ptr() };
-        let mut pl011_data = *data.deref();
         let flags: u64 = 0;
 
         unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
 
-        pl011_data.im = UART011_RTIM | UART011_RXIM;
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype);
+        data.im = UART011_RTIM | UART011_RXIM;
+        pl011_write(data.im, port.membase, UART011_IMSC as usize, port.iotype);
 
         unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
@@ -416,24 +411,22 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @stop_rx:      stop receiving"]
-    fn stop_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn stop_rx(_port: &UartPort, data: &mut Self::Data) {
         let port = unsafe { *_port.as_ptr() };
-        let mut pl011_data = *data.deref();
-        pl011_data.im &= !(UART011_RXIM | UART011_RTIM | UART011_FEIM | 
+        data.im &= !(UART011_RXIM | UART011_RTIM | UART011_FEIM | 
                         UART011_PEIM | UART011_BEIM | UART011_OEIM);
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
+        pl011_write(data.im, port.membase, UART011_IMSC as usize, port.iotype)
     }
 
     #[doc = " * @start_rx:    start receiving"]
-    fn start_rx(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn start_rx(_port: &UartPort, data: &mut Self::Data) {
     }
 
     #[doc = " * @enable_ms:    enable modem status interrupts"]
-    fn enable_ms(_port: &UartPort, data: ArcBorrow<'_, PL011Data>) {
+    fn enable_ms(_port: &UartPort, data: &mut Self::Data) {
         let port = unsafe { *_port.as_ptr() };
-        let mut pl011_data = *data.deref();
-        pl011_data.im |= UART011_RIMIM | UART011_CTSMIM | UART011_DCDMIM | UART011_DSRMIM;
-        pl011_write(pl011_data.im, port.membase, UART011_IMSC as usize, port.iotype)
+        data.im |= UART011_RIMIM | UART011_CTSMIM | UART011_DCDMIM | UART011_DSRMIM;
+        pl011_write(data.im, port.membase, UART011_IMSC as usize, port.iotype)
     }
 
     #[doc = " * @break_ctl:   set the break control"]

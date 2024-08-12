@@ -37,28 +37,28 @@ pub trait UartPortOps {
     fn get_mctrl(_port: &UartPort) -> u32;
 
     /// * @stop_tx:      stop transmitting
-    fn stop_tx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn stop_tx(_port: &UartPort, data: &mut Self::Data);
 
     /// * @start_tx:    start transmitting
-    fn start_tx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn start_tx(_port: &UartPort, data: &mut Self::Data);
 
     /// * @throttle:     stop receiving
-    fn throttle(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn throttle(_port: &UartPort, data: &mut Self::Data);
 
     /// * @unthrottle:   start receiving
-    fn unthrottle(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn unthrottle(_port: &UartPort, data: &mut Self::Data);
 
     /// * @send_xchar:  send a break character
     fn send_xchar(_port: &UartPort, ch: i8);
 
     /// * @stop_rx:      stop receiving
-    fn stop_rx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn stop_rx(_port: &UartPort, data: &mut Self::Data);
 
     /// * @start_rx:    start receiving
-    fn start_rx(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn start_rx(_port: &UartPort, data: &mut Self::Data);
 
     /// * @enable_ms:    enable modem status interrupts
-    fn enable_ms(_port: &UartPort, data: <Self::Data as ForeignOwnable>::Borrowed<'_>);
+    fn enable_ms(_port: &UartPort, data: &mut Self::Data);
 
     /// * @break_ctl:   set the break control
     fn break_ctl(_port: &UartPort, ctl: i32);
@@ -92,7 +92,7 @@ pub trait UartPortOps {
     fn release_port(uart_port: &UartPort);
 
     /// * @request_port: request the UART port
-    fn request_port(uart_port: & UartPort) -> i32;
+    fn request_port(uart_port: &UartPort) -> i32;
 
     /// * @config_port:  configure the UART port
     fn config_port(uart_port: &UartPort, flags: i32);
@@ -273,29 +273,29 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn stop_tx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::stop_tx(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::stop_tx(port, &mut data)
     }
 
     unsafe extern "C" fn start_tx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::start_tx(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::start_tx(port, &mut data)
     }
 
     unsafe extern "C" fn throttle_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::throttle(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::throttle(port, &mut data)
     }
 
     unsafe extern "C" fn unthrottle_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::unthrottle(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::unthrottle(port, &mut data)
     }
 
     unsafe extern "C" fn send_xchar_callback(uart_port: *mut bindings::uart_port, ch: core::ffi::c_char) {
@@ -307,22 +307,22 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn stop_rx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::stop_rx(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::stop_rx(port, &mut data)
     }
 
     unsafe extern "C" fn start_rx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::start_rx(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::start_rx(port, &mut data)
     }
 
     unsafe extern "C" fn enable_ms_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let data = unsafe { T::Data::borrow(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::enable_ms(port, data)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::enable_ms(port, &mut data)
     }
 
     unsafe extern "C" fn break_ctl_callback(uart_port: *mut bindings::uart_port, ctl: core::ffi::c_int) {

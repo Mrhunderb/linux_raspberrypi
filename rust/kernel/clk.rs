@@ -63,6 +63,8 @@ impl Drop for Clk {
 // to move it between threads.
 unsafe impl Send for Clk {}
 
+unsafe impl Sync for Clk {}
+
 /// A clock variant that is prepared and enabled.
 pub struct EnabledClk(Clk);
 

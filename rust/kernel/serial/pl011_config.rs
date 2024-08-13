@@ -96,6 +96,17 @@ pub const UART011_DCDMIM: u32 = 1 << 2;	/* DCD interrupt mask */
 pub const UART011_CTSMIM: u32 = 1 << 1;	/* CTS interrupt mask */
 pub const UART011_RIMIM: u32 = 1 << 0;	/* RI interrupt mask */
 
+pub const UART011_OEIS: u32 = 1 << 10;	/* overrun error interrupt status */
+pub const UART011_BEIS: u32 = 1 << 9;	/* break error interrupt status */
+pub const UART011_PEIS: u32 = 1 << 8;	/* parity error interrupt status */
+pub const UART011_FEIS: u32 = 1 << 7;	/* framing error interrupt status */
+pub const UART011_RTIS: u32 = 1 << 6;	/* receive timeout interrupt status */
+pub const UART011_TXIS: u32 = 1 << 5;	/* transmit interrupt status */
+pub const UART011_RXIS: u32 = 1 << 4;	/* receive interrupt status */
+pub const UART011_DSRMIS: u32 = 1 << 3;	/* DSR interrupt status */
+pub const UART011_DCDMIS: u32 = 1 << 2;	/* DCD interrupt status */
+pub const UART011_CTSMIS: u32 = 1 << 1;	/* CTS interrupt status */
+pub const UART011_RIMIS: u32 = 1 << 0;	/* RI interrupt status */
  
 pub const UART011_LCRH_SPS: u32 = 0x80;
 pub const UART01X_LCRH_WLEN_8: u32 = 0x60;

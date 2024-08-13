@@ -21,6 +21,7 @@
  */
 
 #include "linux/compiler.h"
+#include "linux/pinctrl/consumer.h"
 #include "linux/types.h"
 #include <kunit/test-bug.h>
 #include <linux/bug.h>
@@ -433,6 +434,12 @@ void rust_helper_mb(void)
 	mb();
 }
 EXPORT_SYMBOL_GPL(rust_helper_mb);
+
+int rust_helper_pinctrl_pm_select_default_state(struct device *dev)
+{
+	return pinctrl_pm_select_default_state(dev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_pinctrl_pm_select_default_state);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

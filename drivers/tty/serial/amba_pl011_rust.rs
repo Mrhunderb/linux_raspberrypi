@@ -7,7 +7,7 @@
 use core::{clone::Clone, ops::Deref};
 
 use kernel::{
-    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, serial:: {
+    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
     }, sync::{Arc, ArcBorrow}, types::ForeignOwnable
 };
@@ -99,11 +99,11 @@ pub(crate) static VENDOR_DATA: VendorData = VendorData {
     fixfixed_options:     false,
 };
 
-#[derive(Default, Copy, Clone)]
 struct PL011Data {
     reg_offset: u16,
     im: u32,
     old_status: u32,
+    clk: Clk,
     fifosize: u32,
     fixed_baud:u32,
     type_ : u32,
@@ -507,12 +507,25 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
-    fn poll_init(uart_port: &UartPort) -> i32 {
-        let port = unsafe { *uart_port.as_ptr() };
-        // TODO: Implement uart_poll_init
+    fn poll_init(uart_port: &UartPort, data: &mut Self::Data) -> i32 {
+        let mut port = unsafe { *uart_port.as_ptr() };
+        unsafe { bindings::pinctrl_pm_select_default_state(port.dev) };
+        let ret = data.clk.prepare_enable();
+        if ret.is_err() {
+            return 0;
+        }
+        port.uartclk = data.clk.get_rate() as u32;
+        dbg!("====Serial: uartclk is {}", port.uartclk);
+        pl011_write(UART011_OEIS | UART011_BEIS | UART011_PEIS | 
+                UART011_FEIS | UART011_RTIS | UART011_RXIS, 
+                port.membase, UART011_IMSC as usize, port.iotype);
+        
+        data.im = pl011_read(port.membase, UART011_IMSC as usize, port.iotype);
+        pl011_write(UART011_RTIM | UART011_RXIM, port.membase, UART011_IMSC as usize, port.iotype);
 
-        // let retval = unsafe { bindings::clk_prepare_enable(port.clk) };
-        todo!()
+        // TODO: Implement amba_pl011_data
+
+        return 0;
     }
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]

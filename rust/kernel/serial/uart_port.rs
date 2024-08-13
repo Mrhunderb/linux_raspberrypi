@@ -104,7 +104,7 @@ pub trait UartPortOps {
     fn ioctl(uart_port: &UartPort, arg2: u32, arg3: u64) -> i32;
 
     /// #[cfg(CONFIG_CONSOLE_POLL)]
-    fn poll_init(uart_port: &UartPort) -> i32;
+    fn poll_init(uart_port: &UartPort, data: &mut Self::Data) -> i32;
     /// #[cfg(CONFIG_CONSOLE_POLL)]
     fn poll_put_char(uart_port: &UartPort, arg2: u8);
     /// #[cfg(CONFIG_CONSOLE_POLL)]
@@ -421,7 +421,8 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn poll_init_callback(uart_port: *mut bindings::uart_port) -> core::ffi::c_int {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        T::poll_init(port)
+        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
+        T::poll_init(port, &mut data)
     }
 
     unsafe extern "C" fn poll_put_char_callback(uart_port: *mut bindings::uart_port, ch: core::ffi::c_uchar) {

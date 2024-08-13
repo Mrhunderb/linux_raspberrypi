@@ -4,10 +4,10 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{clone::Clone, ops::Deref};
+use core::{any::Any, clone::Clone, ops::Deref, ptr::null};
 
 use kernel::{
-    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
+    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
     }, sync::{Arc, ArcBorrow}, types::ForeignOwnable
 };
@@ -21,6 +21,7 @@ pub const UPF_BOOT_AUTOCONF: u64 = 1_u64 << 28;
 pub(crate) const UART_NR: usize = 14;
 const AMBA_MAJOR: i32 = 204;
 const AMBA_MINOR: i32 = 64;
+const AMBA_ISR_PASS_LIMIT: i32 = 256;
 const DEV_NAME: &CStr = c_str!("ttyAMA");
 const DRIVER_NAME: &CStr = c_str!("ttyAMA");
 
@@ -106,7 +107,7 @@ struct PL011Data {
     clk: Clk,
     fifosize: u32,
     fixed_baud:u32,
-    type_ : u32,
+    type_ : [i8; 12],
     rs485_tx_started: bool,
     // vendor: VendorData,
 }
@@ -454,9 +455,13 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @startup:      start the UART"]
-    fn startup(_port: &UartPort) -> i32 {
+    fn startup(_port: &UartPort, data: &mut Self::Data) -> i32 {
         let port = unsafe { *_port.as_ptr() };
-        todo!()
+        let mut retval = PL011PortOps::poll_init(_port, data);
+        if retval != 0 {
+            data.clk.disable_unprepare();
+        }
+        return 0;
     }
 
     #[doc = " * @shutdown:     shutdown the UART"]
@@ -485,8 +490,13 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " * @type:          get the type of the UART"]
-    fn port_type(_port: &UartPort) ->  *const i8 {
-        todo!()
+    fn port_type(_port: &UartPort, data: &mut Self::Data) ->  *const i8 {
+        let port = unsafe { *_port.as_ptr() };
+        if port.type_ == PORT_AMBA {
+            data.type_.as_ptr()
+        } else {
+            null()
+        }
     }
 
     #[doc = " * @release_port: release the UART port"]
@@ -501,12 +511,30 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " * @config_port:  configure the UART port"]
     fn config_port(uart_port: &UartPort,flags:i32) {
-        todo!()
+        let mut port = unsafe { *uart_port.as_ptr() };
+        if flags & UART_CONFIG_TYPE as i32 != 0 {
+            port.type_ = PORT_AMBA;
+        }
     }
 
     #[doc = " * @verify_port:  verify the UART port"]
     fn verify_port(uart_port: &UartPort,ser: *mut bindings::serial_struct) -> i32 {
-        todo!()
+        let port = unsafe { *uart_port.as_ptr() };
+        let ser_dref = unsafe { *ser };
+        let mut ret: i32 = 0;
+        if ser_dref.type_ != PORT_UNKNOWN as i32 && ser_dref.type_ != PORT_AMBA as i32 {
+            ret = EINVAL.to_errno();
+        }
+        if ser_dref.irq < 0 || ser_dref.irq >= NR_IRQS as i32 {
+            ret = EINVAL.to_errno();
+        }
+        if ser_dref.baud_base < 9600 {
+            ret = EINVAL.to_errno();
+        }
+        if port.mapbase != ser_dref.iomem_base as u64 {
+            ret = EINVAL.to_errno();
+        }
+        ret
     }
 
     #[doc = " * @ioctl:        ioctl handler"]
@@ -554,5 +582,40 @@ impl UartPortOps for PL011PortOps {
             return NO_POLL_CHAR as i32;
         }
         return pl011_read(port.membase, UART01X_DR as usize, port.iotype) as i32;
+    }
+}
+
+struct PL011Irq;
+
+impl irq::Handler for PL011Irq {
+    type Data = Box<UartPort>;
+
+    fn handle_irq(data: &UartPort) -> irq::Return {
+        let port_ptr = data.as_ptr();
+        let port = unsafe { *data.as_ptr() };
+        let flags: u64 = 0;
+        let mut status = AMBA_ISR_PASS_LIMIT;
+        let pass_counter  = AMBA_ISR_PASS_LIMIT;
+        let mut handled = 0;
+
+        unsafe { bindings::spin_lock_irqsave(&mut (*port_ptr).lock, flags) };
+        status = pl011_read(port.membase, UART011_RIS as usize, port.iotype) as i32;
+        if status != 0 {
+            loop {
+
+
+               if status == 0 {
+                break;
+               } 
+            }
+            handled = 1;
+        }
+        unsafe { bindings::spin_unlock_irqrestore(&mut (*port_ptr).lock, flags) };
+
+        if handled == 0 {
+            irq::Return::None
+        } else {
+            irq::Return::Handled
+        }
     }
 }

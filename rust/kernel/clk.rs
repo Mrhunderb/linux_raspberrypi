@@ -50,6 +50,11 @@ impl Clk {
         }
         Ok(())
     }
+
+    pub fn disable_unprepare(&self) {
+        // SAFETY: call ffi and ptr is valid
+        unsafe{ bindings::clk_disable_unprepare(self.0.get()) }
+    }
 }
 
 impl Drop for Clk {

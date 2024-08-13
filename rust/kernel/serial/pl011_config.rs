@@ -196,6 +196,13 @@ pub const UART_XMIT_SIZE: i32 = PAGE_SIZE as i32;
 
 pub const NO_POLL_CHAR: u32 = 0x00ff0000;
 
+pub const PORT_AMBA: u32 = 32;
+pub const PORT_UNKNOWN: u32 = 0;
+pub const UART_CONFIG_TYPE: u32 = 1 << 0;
+pub const UART_CONFIG_IRQ: u32 = 1 << 1;
+
+pub const NR_IRQS: u32 = 64;
+
 #[derive(Default, Copy, Clone)]
 pub struct VendorData {
     pub ifls: u32,

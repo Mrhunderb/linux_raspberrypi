@@ -303,6 +303,14 @@ fn pl011_start_tx_pio(port: &UartPort, data: &mut Box<PL011Data>) {
     }
 }
 
+fn pl011_quiesce_irq(port: &UartPort) {
+    let pl011_port = unsafe { *port.as_ptr() };
+    let mut val = pl011_read(pl011_port.membase, UART011_MIS as usize, pl011_port.iotype);
+    pl011_write(val, pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
+    val = pl011_read(pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+    pl011_write(val & !UART011_TXIM, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype)
+}
+
 struct PL011PortOps;
 
 #[vtable]
@@ -535,6 +543,12 @@ impl UartPortOps for PL011PortOps {
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
     fn poll_get_char(uart_port: &UartPort) -> i32 {
-        todo!()
+        let mut port = unsafe { *uart_port.as_ptr() };
+        pl011_quiesce_irq(uart_port);
+        let status = pl011_read(port.membase, UART01X_FR as usize, port.iotype);
+        if status & UART01X_FR_RXFE != 0 {
+            return NO_POLL_CHAR as i32;
+        }
+        return pl011_read(port.membase, UART01X_DR as usize, port.iotype) as i32;
     }
 }

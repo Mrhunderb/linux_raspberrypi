@@ -441,6 +441,12 @@ int rust_helper_pinctrl_pm_select_default_state(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(rust_helper_pinctrl_pm_select_default_state);
 
+void rust_helper_cpu_relax(void)
+{
+	cpu_relax();
+}
+EXPORT_SYMBOL_GPL(rust_helper_cpu_relax);
+
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
  * use it in contexts where Rust expects a `usize` like slice (array) indices.

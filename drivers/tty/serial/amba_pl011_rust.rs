@@ -537,13 +537,17 @@ impl UartPortOps for PL011PortOps {
     }
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
-    fn poll_put_char(uart_port: &UartPort,arg2:u8) {
-        todo!()
+    fn poll_put_char(uart_port: &UartPort, arg2:u8) {
+        let port = unsafe { *uart_port.as_ptr() };
+        while pl011_read(port.membase, UART01X_FR as usize, port.iotype) & UART01X_FR_TXFF != 0 {
+            unsafe { bindings::cpu_relax() };
+        }
+        pl011_write(arg2 as u32, port.membase, UART01X_DR as usize, port.iotype);
     }
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
     fn poll_get_char(uart_port: &UartPort) -> i32 {
-        let mut port = unsafe { *uart_port.as_ptr() };
+        let port = unsafe { *uart_port.as_ptr() };
         pl011_quiesce_irq(uart_port);
         let status = pl011_read(port.membase, UART01X_FR as usize, port.iotype);
         if status & UART01X_FR_RXFE != 0 {

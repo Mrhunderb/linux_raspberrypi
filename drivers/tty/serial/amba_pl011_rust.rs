@@ -4,7 +4,7 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{any::Any, clone::Clone, ops::Deref, ptr::null};
+use core::{any::Any, clone::Clone, convert::AsRef, ops::{Deref, DerefMut}, ptr::null};
 
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
@@ -109,7 +109,6 @@ struct PL011Data {
     fixed_baud:u32,
     type_ : [i8; 12],
     rs485_tx_started: bool,
-    // vendor: VendorData,
 }
 
 struct PL011Resources {
@@ -239,7 +238,7 @@ fn pl011_tx_chars(port: &UartPort,  data: &mut Box<PL011Data>, from_irq: bool) -
     }
     // TODO: Implement uart_tx_stopped
     if uart_circ_empty(&xmit) {
-        PL011PortOps::stop_tx(port, data);
+        PL011Device::stop_tx(port, data);
         return false;
     }
 
@@ -312,10 +311,9 @@ fn pl011_quiesce_irq(port: &UartPort) {
     pl011_write(val & !UART011_TXIM, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype)
 }
 
-struct PL011PortOps;
 
 #[vtable]
-impl UartPortOps for PL011PortOps {
+impl UartPortOps for PL011Device {
 
     #[doc = " User data that will be accessible to all operations"]
     type Data = Box<PL011Data>;
@@ -457,11 +455,11 @@ impl UartPortOps for PL011PortOps {
     #[doc = " * @startup:      start the UART"]
     fn startup(_port: &UartPort, data: &mut Self::Data) -> i32 {
         let port = unsafe { *_port.as_ptr() };
-        let mut retval = PL011PortOps::poll_init(_port, data);
+        let mut retval = PL011Device::poll_init(_port, data);
         if retval != 0 {
             data.clk.disable_unprepare();
         }
-        return 0;
+        todo!()
     }
 
     #[doc = " * @shutdown:     shutdown the UART"]
@@ -585,14 +583,20 @@ impl UartPortOps for PL011PortOps {
     }
 }
 
+struct IrqPrivateData {
+    pl011_hw_ops: Arc<PL011Device>,
+    port: Box<UartPort>,
+    data: Box<PL011DeviceData>
+}
+
 struct PL011Irq;
 
 impl irq::Handler for PL011Irq {
-    type Data = Box<UartPort>;
+    type Data = Box<IrqPrivateData>;
 
-    fn handle_irq(data: &UartPort) -> irq::Return {
-        let port_ptr = data.as_ptr();
-        let port = unsafe { *data.as_ptr() };
+    fn handle_irq(data: &IrqPrivateData) -> irq::Return {
+        let mut port_ptr= data.port.as_ptr();
+        let port = unsafe { *port_ptr };
         let flags: u64 = 0;
         let mut status = AMBA_ISR_PASS_LIMIT;
         let pass_counter  = AMBA_ISR_PASS_LIMIT;
@@ -602,11 +606,13 @@ impl irq::Handler for PL011Irq {
         status = pl011_read(port.membase, UART011_RIS as usize, port.iotype) as i32;
         if status != 0 {
             loop {
-
-
-               if status == 0 {
-                break;
-               } 
+                check_apply_cts_event_workaround(data.port.as_ref());
+                pl011_write(status as u32 & !(UART011_TXIS|UART011_RTIS|UART011_RXIS), 
+                        port.membase, UART011_ICR as usize, port.iotype);
+                status = pl011_read(port.membase, UART011_RIS as usize, port.iotype) as i32;
+                if status == 0 {
+                 break;
+                } 
             }
             handled = 1;
         }
@@ -618,4 +624,14 @@ impl irq::Handler for PL011Irq {
             irq::Return::Handled
         }
     }
+}
+
+fn check_apply_cts_event_workaround(port: &UartPort) {
+    let pl011_port = unsafe { *port.as_ptr() };
+    if !VENDOR_DATA.cts_event_workaround {
+        return;
+    }
+    pl011_write(0x00, pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
+    pl011_read(pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
+    pl011_read(pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
 }

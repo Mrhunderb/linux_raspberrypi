@@ -20,8 +20,10 @@
  * Sorted alphabetically.
  */
 
+#include "asm-generic/int-ll64.h"
 #include "linux/compiler.h"
 #include "linux/pinctrl/consumer.h"
+#include "linux/serial_core.h"
 #include "linux/tty_flip.h"
 #include "linux/types.h"
 #include <kunit/test-bug.h>
@@ -453,6 +455,30 @@ void rust_helper_tty_flip_buffer_push(struct tty_port *port)
 	tty_flip_buffer_push(port);
 }
 EXPORT_SYMBOL_GPL(rust_helper_tty_flip_buffer_push);
+
+void rust_helper_uart_handle_sysrq_char(struct uart_port *port, u8 ch)
+{
+	uart_handle_sysrq_char(port, ch);
+}
+EXPORT_SYMBOL_GPL(rust_helper_uart_handle_sysrq_char);
+
+int rust_helper_uart_handle_break(struct uart_port *port)
+{
+	return uart_handle_break(port);
+}
+EXPORT_SYMBOL_GPL(rust_helper_uart_handle_break);
+
+void rust_helper_uart_handle_dcd_change(struct uart_port *port, bool active)
+{
+	uart_handle_dcd_change(port, active);
+}
+EXPORT_SYMBOL_GPL(rust_helper_uart_handle_dcd_change);
+
+void rust_helper_wake_up_interruptible(struct wait_queue_head *wq_head)
+{
+	wake_up_interruptible(wq_head);
+}
+EXPORT_SYMBOL_GPL(rust_helper_wake_up_interruptible);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

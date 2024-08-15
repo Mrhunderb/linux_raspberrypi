@@ -16,6 +16,10 @@ const UART_SIZE: usize = 0x200;
 const UPIO_MEM: u32 = 2;
 const UPIO_MEM32: u32 = 3;
 
+
+const UART_DR_ERROR: u32 = UART011_DR_OE|UART011_DR_BE|UART011_DR_PE|UART011_DR_FE;
+const UART_DUMMY_DR_RX:u32 = 1 << 16;
+
 pub const UPF_BOOT_AUTOCONF: u64 = 1_u64 << 28;
 
 pub(crate) const UART_NR: usize = 14;
@@ -241,7 +245,7 @@ impl PL011Device {
         }
         // TODO: Implement uart_tx_stopped
         if uart_circ_empty(&xmit) {
-            PL011Device::stop_tx(port);
+            Self::stop_tx(port);
             return false;
         }
 
@@ -277,7 +281,7 @@ impl PL011Device {
         Self::pl011_fifo_to_tty(port);
 
         unsafe { bindings::spin_unlock(&mut pl011_port.lock) }
-        unsafe { bindings::tty_flip_buffer_push(&mut (*(pl011_port.state)).port) };
+        unsafe { bindings::tty_flip_buffer_push(&mut (*pl011_port.state).port) };
         unsafe { bindings::spin_lock(&mut pl011_port.lock) }
     }
 
@@ -331,6 +335,84 @@ impl PL011Device {
     }
 
     fn pl011_fifo_to_tty(port: &UartPort) {
+        let mut fifotaken = 0;
+        let mut sysrq = 0;
+        let mut pl011_port = unsafe { *port.as_ptr() };
+        let mut port_ptr = port.as_ptr();
+        while fifotaken != 256 {
+            let status = Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype);
+            if status & UART01X_FR_RXFE != 0 {
+                break;
+            }
+
+            let mut ch = Self::pl011_read(pl011_port.membase, !(UART01X_DR|UART011_DR_PE) as usize, pl011_port.iotype);
+            let mut flag = TTY_NORMAL;
+            (unsafe { *port_ptr }).icount.rx += 1;
+
+            if unsafe { bindings::unlikely((ch & UART_DR_ERROR) != 0) } {
+                if ch & UART011_DR_BE != 0 {
+                    ch &= !(UART011_DR_FE | UART011_DR_PE);
+                    (unsafe { *port_ptr }).icount.brk += 1;
+                    if unsafe { bindings::uart_handle_break(port_ptr) != 0 } {
+                        continue;
+                    }
+                } else if ch & UART011_DR_PE != 0 {
+                    (unsafe { *port_ptr }).icount.parity += 1;
+                } else if ch & UART011_DR_FE != 0 {
+                    (unsafe { *port_ptr }).icount.frame += 1;
+                } 
+                if ch & UART011_DR_FE != 0 {
+                    (unsafe { *port_ptr }).icount.overrun += 1;
+                }
+
+                ch &= pl011_port.read_status_mask;
+
+                if ch & UART011_DR_BE != 0 {
+                    flag = TTY_BREAK;
+                } else if ch & UART011_DR_PE != 0 {
+                    flag = TTY_PARITY;
+                } else if ch & UART011_DR_FE != 0 {
+                    flag = TTY_FRAME;
+                }
+            }
+
+            unsafe { bindings::spin_unlock(&mut (*port_ptr).lock) };
+            unsafe { bindings::uart_handle_sysrq_char(port_ptr, (ch & 255) as u8) };
+            unsafe { bindings::spin_lock(&mut (*port_ptr).lock) };
+
+            if !sysrq != 0 {
+                unsafe { bindings::uart_insert_char(port_ptr, ch, UART011_DR_OE, ch as u8, flag) };
+            }
+            fifotaken += 1;
+        }
+    }
+
+    fn pl011_modem_status(port: &UartPort) {
+        let mut port_ptr = port.as_ptr();
+        let mut pl011_port = unsafe { *port_ptr };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        let mut status= Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) & UART01X_FR_MODEM_ANY;
+        let delta = status ^ data.old_status;
+        data.old_status = status;
+        if !delta != 0 {
+            return;
+        }
+
+        if delta & UART01X_FR_DCD != 0 {
+            unsafe { bindings::uart_handle_dcd_change(port_ptr, status & UART01X_FR_DCD != 0) };
+        }
+
+        if delta & VENDOR_DATA.fr_dsr != 0 {
+            (unsafe { *port_ptr }).icount.dsr += 1;
+        }
+
+        if delta & VENDOR_DATA.fr_cts != 0 {
+            unsafe { bindings::uart_handle_cts_change(port_ptr,
+                                             status & VENDOR_DATA.fr_cts != 0) }; 
+        }
+	    unsafe { bindings::wake_up_interruptible(&mut (*pl011_port.state).port.delta_msr_wait) };
     }
 }
 
@@ -426,7 +508,7 @@ impl UartPortOps for PL011Device {
         let mut port = unsafe { *_port.as_ptr() };
         let flags: u64 = 0;
         unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
-        PL011Device::stop_rx(&_port);
+        Self::stop_rx(&_port);
         unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
@@ -497,7 +579,7 @@ impl UartPortOps for PL011Device {
         let data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
         };
-        let retval = PL011Device::poll_init(_port);
+        let retval = Self::poll_init(_port);
         if retval != 0 {
             data.clk.disable_unprepare();
         }
@@ -669,14 +751,17 @@ impl irq::Handler for PL011Irq {
                 PL011Device::pl011_write(status as u32 & !(UART011_TXIS|UART011_RTIS|UART011_RXIS), 
                         port.membase, UART011_ICR as usize, port.iotype);
 
-                if status as u32 & (UART011_DSRMIS|UART011_DCDMIS|
-				      UART011_CTSMIS|UART011_RIMIS) != 0 {
+                if status as u32 & (UART011_RTIS|UART011_RXIS) != 0 {
+                    PL011Device::pl011_rx_chars(&data);
                 }
 
-                if status as u32 & (UART011_RTIS|UART011_RXIS) != 0 {
+                if status as u32 & (UART011_DSRMIS|UART011_DCDMIS|
+				      UART011_CTSMIS|UART011_RIMIS) != 0 {
+                    PL011Device::pl011_modem_status(&data);
                 }
 
                 if status as u32 & UART011_TXIS != 0 {
+                    PL011Device::pl011_tx_chars(&data, true);
                 }
 
                 if pass_counter == 0 {

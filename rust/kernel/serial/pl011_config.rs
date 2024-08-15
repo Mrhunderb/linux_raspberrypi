@@ -128,6 +128,12 @@ pub const UART01X_FR_BUSY: u32 = 0x008;
 pub const UART01X_FR_DCD: u32 = 0x004;
 pub const UART01X_FR_DSR: u32 = 0x002;
 pub const UART01X_FR_CTS: u32 = 0x001;
+pub const UART01X_FR_TMSK: u32 = UART01X_FR_TXFF + UART01X_FR_BUSY;
+
+pub const UART011_DR_OE: u32 = 1 << 11;
+pub const UART011_DR_BE: u32 = 1 << 10;
+pub const UART011_DR_PE: u32 = 1 << 9;
+pub const UART011_DR_FE: u32 = 1 << 8;
 
 /*
  * Some bits of Flag Register on ZTE device have different position from
@@ -190,6 +196,12 @@ pub const SER_RS485_ADDRB: u32 = 1 << 6;
 pub const SER_RS485_ADDR_RECV: u32 = 1 << 7;
 pub const SER_RS485_ADDR_DEST: u32 = 1 << 8;
 
+pub const TTY_NORMAL:u8  = 0;
+pub const TTY_BREAK: u8 = 1;
+pub const TTY_FRAME: u8 = 2;
+pub const TTY_PARITY: u8 = 3;
+pub const TTY_OVERRUN: u8 = 4;
+
 
 pub const PAGE_SIZE: u32 = 1 << bindings::PAGE_SHIFT;
 pub const UART_XMIT_SIZE: i32 = PAGE_SIZE as i32;
@@ -202,6 +214,9 @@ pub const UART_CONFIG_TYPE: u32 = 1 << 0;
 pub const UART_CONFIG_IRQ: u32 = 1 << 1;
 
 pub const NR_IRQS: u32 = 64;
+
+pub const UART01X_FR_MODEM_ANY: u32 = UART01X_FR_DCD|UART01X_FR_DSR|UART01X_FR_CTS;
+
 
 #[derive(Default, Copy, Clone)]
 pub struct VendorData {

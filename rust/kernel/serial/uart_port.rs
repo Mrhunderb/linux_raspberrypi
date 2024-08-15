@@ -37,34 +37,34 @@ pub trait UartPortOps {
     fn get_mctrl(_port: &UartPort) -> u32;
 
     /// * @stop_tx:      stop transmitting
-    fn stop_tx(_port: &UartPort, data: &mut Self::Data);
+    fn stop_tx(_port: &UartPort);
 
     /// * @start_tx:    start transmitting
-    fn start_tx(_port: &UartPort, data: &mut Self::Data);
+    fn start_tx(_port: &UartPort);
 
     /// * @throttle:     stop receiving
-    fn throttle(_port: &UartPort, data: &mut Self::Data);
+    fn throttle(_port: &UartPort);
 
     /// * @unthrottle:   start receiving
-    fn unthrottle(_port: &UartPort, data: &mut Self::Data);
+    fn unthrottle(_port: &UartPort);
 
     /// * @send_xchar:  send a break character
     fn send_xchar(_port: &UartPort, ch: i8);
 
     /// * @stop_rx:      stop receiving
-    fn stop_rx(_port: &UartPort, data: &mut Self::Data);
+    fn stop_rx(_port: &UartPort);
 
     /// * @start_rx:    start receiving
-    fn start_rx(_port: &UartPort, data: &mut Self::Data);
+    fn start_rx(_port: &UartPort);
 
     /// * @enable_ms:    enable modem status interrupts
-    fn enable_ms(_port: &UartPort, data: &mut Self::Data);
+    fn enable_ms(_port: &UartPort);
 
     /// * @break_ctl:   set the break control
     fn break_ctl(_port: &UartPort, ctl: i32);
 
     /// * @startup:      start the UART
-    fn startup(_port: &UartPort, data: &mut Self::Data) -> i32;
+    fn startup(_port: &UartPort) -> i32;
 
     /// * @shutdown:     shutdown the UART
     fn shutdown(_port: &UartPort);
@@ -86,7 +86,7 @@ pub trait UartPortOps {
     fn pm(_port: &UartPort, _state: u32, _oldstate: u32);
 
     /// * @type:          get the type of the UART
-    fn port_type(_port: &UartPort, data: &mut Self::Data) -> *const i8;
+    fn port_type(_port: &UartPort) -> *const i8;
 
     /// * @release_port: release the UART port
     fn release_port(uart_port: &UartPort);
@@ -104,7 +104,7 @@ pub trait UartPortOps {
     fn ioctl(uart_port: &UartPort, arg2: u32, arg3: u64) -> i32;
 
     /// #[cfg(CONFIG_CONSOLE_POLL)]
-    fn poll_init(uart_port: &UartPort, data: &mut Self::Data) -> i32;
+    fn poll_init(uart_port: &UartPort) -> i32;
     /// #[cfg(CONFIG_CONSOLE_POLL)]
     fn poll_put_char(uart_port: &UartPort, arg2: u8);
     /// #[cfg(CONFIG_CONSOLE_POLL)]
@@ -273,29 +273,25 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn stop_tx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::stop_tx(port, &mut data)
+        T::stop_tx(port)
     }
 
     unsafe extern "C" fn start_tx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::start_tx(port, &mut data)
+        T::start_tx(port)
     }
 
     unsafe extern "C" fn throttle_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::throttle(port, &mut data)
+        T::throttle(port)
     }
 
     unsafe extern "C" fn unthrottle_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::unthrottle(port, &mut data)
+        T::unthrottle(port)
     }
 
     unsafe extern "C" fn send_xchar_callback(uart_port: *mut bindings::uart_port, ch: core::ffi::c_char) {
@@ -307,22 +303,19 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn stop_rx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::stop_rx(port, &mut data)
+        T::stop_rx(port)
     }
 
     unsafe extern "C" fn start_rx_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::start_rx(port, &mut data)
+        T::start_rx(port)
     }
 
     unsafe extern "C" fn enable_ms_callback(uart_port: *mut bindings::uart_port) {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::enable_ms(port, &mut data)
+        T::enable_ms(port)
     }
 
     unsafe extern "C" fn break_ctl_callback(uart_port: *mut bindings::uart_port, ctl: core::ffi::c_int) {
@@ -334,8 +327,7 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn startup_callback(uart_port: *mut bindings::uart_port) -> core::ffi::c_int {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::startup(port, &mut data)
+        T::startup(port)
     }
 
     unsafe extern "C" fn shutdown_callback(uart_port: *mut bindings::uart_port) {
@@ -379,8 +371,7 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn port_type_callback(uart_port: *mut bindings::uart_port) -> *const core::ffi::c_char {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::port_type(port, &mut data)
+        T::port_type(port)
     }
 
     unsafe extern "C" fn release_port_callback(uart_port: *mut bindings::uart_port) {
@@ -423,8 +414,7 @@ impl<T: UartPortOps> Adapter<T> {
     unsafe extern "C" fn poll_init_callback(uart_port: *mut bindings::uart_port) -> core::ffi::c_int {
         // let port = ManuallyDrop::new(UartPort(uart_port));
         let port = unsafe{ UartPort::from_raw(uart_port) };
-        let mut data = unsafe { T::Data::from_foreign(bindings::dev_get_drvdata((*uart_port).dev)) };
-        T::poll_init(port, &mut data)
+        T::poll_init(port)
     }
 
     unsafe extern "C" fn poll_put_char_callback(uart_port: *mut bindings::uart_port, ch: core::ffi::c_uchar) {

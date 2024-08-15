@@ -22,6 +22,7 @@
 
 #include "linux/compiler.h"
 #include "linux/pinctrl/consumer.h"
+#include "linux/tty_flip.h"
 #include "linux/types.h"
 #include <kunit/test-bug.h>
 #include <linux/bug.h>
@@ -446,6 +447,12 @@ void rust_helper_cpu_relax(void)
 	cpu_relax();
 }
 EXPORT_SYMBOL_GPL(rust_helper_cpu_relax);
+
+void rust_helper_tty_flip_buffer_push(struct tty_port *port)
+{
+	tty_flip_buffer_push(port);
+}
+EXPORT_SYMBOL_GPL(rust_helper_tty_flip_buffer_push);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

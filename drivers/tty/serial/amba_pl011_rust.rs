@@ -4,7 +4,7 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{any::Any, clone::Clone, convert::AsRef, ops::{Deref, DerefMut}, ptr::null};
+use core::{any::Any, clone::Clone, convert::AsRef, ffi::c_void, ops::{Deref, DerefMut}, ptr::null, u32};
 
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
@@ -211,7 +211,7 @@ impl PL011Device {
 
     /// pl011 register read
     fn pl011_read(membase: *mut u8, reg: usize, iotype: u8) -> u32 {
-        let addr = membase.wrapping_add(reg);
+        let addr = memase.wrapping_add(reg);
         if iotype == UPIO_MEM32 as u8 {
             unsafe { bindings::readl_relaxed(addr as _) as _ }
         } else {
@@ -472,6 +472,28 @@ impl PL011Device {
 
         unsafe { bindings::spin_unlock_irq(&mut pl011_port.lock) };
     }
+
+    fn pl011_shutdown_channel(port: &UartPort, lcrh: u32) {
+        let pl011_port = unsafe { *port.as_ptr() };
+        let mut val = Self::pl011_read(pl011_port.membase, lcrh as usize, pl011_port.iotype);
+        val &= !(UART01X_LCRH_BRK | UART01X_LCRH_FEN);
+        Self::pl011_write(val, pl011_port.membase, lcrh as usize, pl011_port.iotype)
+    }
+
+    fn pl011_disable_uart(port: &UartPort) {
+        let mut pl011_port = unsafe { *port.as_ptr() };
+        let mut cr: u32 = 0;
+
+        unsafe { (*port.as_ptr()).status &= !(UPSTAT_AUTOCTS | UPSTAT_AUTORTS) };
+        unsafe { bindings::spin_lock_irq(&mut pl011_port.lock) };
+        cr = Self::pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+        cr &= UART011_CR_RTS | UART011_CR_DTR;
+        cr |= UART01X_CR_UARTEN | UART011_CR_TXE;
+        Self::pl011_write(cr, pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+        unsafe { bindings::spin_unlock_irq(&mut pl011_port.lock) };
+
+        Self::pl011_shutdown_channel(&port, UART011_LCRH as u32);
+    }
 }
 
 #[vtable]
@@ -656,6 +678,8 @@ impl UartPortOps for PL011Device {
                 data.rs485_tx_started {
             Self::pl011_rs485_tx_stop(&_port);
         }
+
+        unsafe { bindings::free_irq(port.irq, _port.as_ptr() as *mut c_void) };
     }
 
     #[doc = " * @flush_buffer: flush the UART buffer"]

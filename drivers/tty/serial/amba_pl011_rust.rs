@@ -243,8 +243,8 @@ impl PL011Device {
             pl011_port.x_char = 0;
             count -= 1;
         }
-        // TODO: Implement uart_tx_stopped
-        if uart_circ_empty(&xmit) {
+        if uart_circ_empty(&xmit) || 
+                unsafe { bindings::uart_tx_stopped(port.as_ptr()) != 0 }{
             Self::stop_tx(port);
             return false;
         }
@@ -313,6 +313,17 @@ impl PL011Device {
         }
 
         data.rs485_tx_started = true;
+    }
+
+    fn pl011_rs485_tx_stop(port: &UartPort) {
+        let pl011_port = unsafe { *port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        let mut cr = Self::pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+        cr &= !(UART011_CR_TXE | UART011_CR_RTS);
+        Self::pl011_write(cr, pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+        data.rs485_tx_started = false;
     }
 
     fn pl011_start_tx_pio(port: &UartPort) {
@@ -413,6 +424,20 @@ impl PL011Device {
                                              status & VENDOR_DATA.fr_cts != 0) }; 
         }
 	    unsafe { bindings::wake_up_interruptible(&mut (*pl011_port.state).port.delta_msr_wait) };
+    }
+
+    fn pl011_disable_interrupts(port: &UartPort) {
+        let mut pl011_port = unsafe { *port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        unsafe { bindings::spin_lock_irq(&mut pl011_port.lock) };
+
+        data.im = 0;
+        Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+        Self::pl011_write(0xffff, pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
+
+        unsafe { bindings::spin_unlock_irq(&mut pl011_port.lock) };
     }
 }
 
@@ -588,7 +613,16 @@ impl UartPortOps for PL011Device {
 
     #[doc = " * @shutdown:     shutdown the UART"]
     fn shutdown(_port: &UartPort) {
-        todo!()
+        let port = unsafe { *_port.as_ptr() };
+        let data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
+        };
+        Self::pl011_disable_interrupts(&_port);
+
+        if port.rs485.flags & bindings::SER_RS485_ENABLED != 0 && 
+                data.rs485_tx_started {
+            Self::pl011_rs485_tx_stop(&_port);
+        }
     }
 
     #[doc = " * @flush_buffer: flush the UART buffer"]
@@ -688,7 +722,7 @@ impl UartPortOps for PL011Device {
         Self::pl011_write(UART011_RTIM | UART011_RXIM, port.membase, UART011_IMSC as usize, port.iotype);
 
         // TODO: Implement amba_pl011_data
-
+        let plat = unsafe { bindings::dev_get_drvdata(port.dev) };
         return 0;
     }
 

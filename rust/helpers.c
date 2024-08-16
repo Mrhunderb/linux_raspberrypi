@@ -420,6 +420,18 @@ void rust_helper_spin_unlock_irqrestore(spinlock_t *lock, unsigned long flags)
 }
 EXPORT_SYMBOL_GPL(rust_helper_spin_unlock_irqrestore);
 
+void rust_helper_spin_unlock_irq(spinlock_t *lock)
+{
+	spin_unlock_irq(lock);
+}
+EXPORT_SYMBOL_GPL(rust_helper_spin_unlock_irq);
+
+void rust_helper_spin_lock_irq(spinlock_t *lock)
+{
+	spin_lock_irq(lock);
+}
+EXPORT_SYMBOL_GPL(rust_helper_spin_lock_irq);
+
 bool rust_helper_likely(bool x)
 {
 	return likely(x);
@@ -479,6 +491,12 @@ void rust_helper_wake_up_interruptible(struct wait_queue_head *wq_head)
 	wake_up_interruptible(wq_head);
 }
 EXPORT_SYMBOL_GPL(rust_helper_wake_up_interruptible);
+
+int rust_helper_uart_tx_stopped(struct uart_port *port)
+{
+	return uart_tx_stopped(port);
+}
+EXPORT_SYMBOL_GPL(rust_helper_uart_tx_stopped);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

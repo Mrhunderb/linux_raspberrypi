@@ -113,6 +113,7 @@ struct PL011Data {
     fixed_baud:u32,
     type_ : [i8; 12],
     rs485_tx_started: bool,
+    rs485_tx_drain_interval: u32,
 }
 
 struct PL011Resources {
@@ -275,8 +276,17 @@ impl PL011Device {
 
     }
 
-    fn pl011_rx_chars(port: &UartPort)
-    {
+    fn pl011_tx_empty(port: &UartPort) -> u32 {
+        let pl011_port = unsafe { *port.as_ptr() };
+        let status = Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype);
+        if status & (VENDOR_DATA.fr_busy|UART01X_FR_TXFF) != 0 {
+            bindings::TIOCSER_TEMT
+        } else {
+            0
+        }
+    }
+
+    fn pl011_rx_chars(port: &UartPort) {
         let mut pl011_port = unsafe { *port.as_ptr() };
         Self::pl011_fifo_to_tty(port);
 
@@ -321,7 +331,30 @@ impl PL011Device {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
         };
         let mut cr = Self::pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
-        cr &= !(UART011_CR_TXE | UART011_CR_RTS);
+        let max_tx_drain_iters = pl011_port.fifosize * 2;
+        let mut i = 0;
+        while Self::pl011_tx_empty(&port) == 0 {
+            if i > max_tx_drain_iters {
+                break;
+            }
+            unsafe { bindings::__udelay(data.rs485_tx_drain_interval as u64); };
+            i += 1;
+        }
+
+        if pl011_port.rs485.delay_rts_after_send != 0 {
+            unsafe { bindings::mdelay(pl011_port.rs485.delay_rts_after_send); };
+        }
+        cr = Self::pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
+
+        if pl011_port.rs485.flags & SER_RS485_RTS_AFTER_SEND != 0 {
+            cr &= !UART011_CR_RTS;
+        } else {
+            cr |= UART011_CR_RTS;
+        }
+
+        cr &= !UART011_CR_TXE;
+        cr |= UART011_CR_RXE;
+
         Self::pl011_write(cr, pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
         data.rs485_tx_started = false;
     }

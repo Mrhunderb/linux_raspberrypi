@@ -22,6 +22,7 @@
 
 #include "asm-generic/int-ll64.h"
 #include "linux/compiler.h"
+#include "linux/delay.h"
 #include "linux/pinctrl/consumer.h"
 #include "linux/serial_core.h"
 #include "linux/tty_flip.h"
@@ -497,6 +498,12 @@ int rust_helper_uart_tx_stopped(struct uart_port *port)
 	return uart_tx_stopped(port);
 }
 EXPORT_SYMBOL_GPL(rust_helper_uart_tx_stopped);
+
+void rust_helper_mdelay(uint32_t msecs)
+{
+	mdelay(msecs);
+}
+EXPORT_SYMBOL_GPL(rust_helper_mdelay);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

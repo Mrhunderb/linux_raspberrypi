@@ -4,12 +4,12 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{any::Any, clone::Clone, convert::AsRef, ffi::c_void, ops::{Deref, DerefMut}, ptr::null, u32};
+use core::{clone::Clone, ffi::c_void, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
-        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}
-    }, sync::{Arc, ArcBorrow}, types::ForeignOwnable
+        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}
+    }, sync::Arc, types::ForeignOwnable
 };
 
 const UART_SIZE: usize = 0x200;
@@ -174,7 +174,6 @@ impl amba::Driver for PL011Driver {
 
     fn remove(_data: &Self::Data) {
         dbg!("********* PL061 GPIO chip removed *********\n");
-        // unsafe { bindings::uart_remove_one_port(&UART_DRIVER, port) };
     }
 }
 
@@ -211,7 +210,7 @@ impl PL011Device {
 
     /// pl011 register read
     fn pl011_read(membase: *mut u8, reg: usize, iotype: u8) -> u32 {
-        let addr = memase.wrapping_add(reg);
+        let addr = membase.wrapping_add(reg);
         if iotype == UPIO_MEM32 as u8 {
             unsafe { bindings::readl_relaxed(addr as _) as _ }
         } else {
@@ -381,8 +380,8 @@ impl PL011Device {
     fn pl011_fifo_to_tty(port: &UartPort) {
         let mut fifotaken = 0;
         let mut sysrq = 0;
-        let mut pl011_port = unsafe { *port.as_ptr() };
-        let mut port_ptr = port.as_ptr();
+        let pl011_port = unsafe { *port.as_ptr() };
+        let port_ptr = port.as_ptr();
         while fifotaken != 256 {
             let status = Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype);
             if status & UART01X_FR_RXFE != 0 {
@@ -421,7 +420,7 @@ impl PL011Device {
             }
 
             unsafe { bindings::spin_unlock(&mut (*port_ptr).lock) };
-            unsafe { bindings::uart_handle_sysrq_char(port_ptr, (ch & 255) as u8) };
+            sysrq = unsafe { bindings::uart_handle_sysrq_char(port_ptr, (ch & 255) as u8) };
             unsafe { bindings::spin_lock(&mut (*port_ptr).lock) };
 
             if !sysrq != 0 {
@@ -432,12 +431,12 @@ impl PL011Device {
     }
 
     fn pl011_modem_status(port: &UartPort) {
-        let mut port_ptr = port.as_ptr();
-        let mut pl011_port = unsafe { *port_ptr };
+        let port_ptr = port.as_ptr();
+        let pl011_port = unsafe { *port_ptr };
         let mut data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
         };
-        let mut status= Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) & UART01X_FR_MODEM_ANY;
+        let status= Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) & UART01X_FR_MODEM_ANY;
         let delta = status ^ data.old_status;
         data.old_status = status;
         if !delta != 0 {
@@ -493,6 +492,15 @@ impl PL011Device {
         unsafe { bindings::spin_unlock_irq(&mut pl011_port.lock) };
 
         Self::pl011_shutdown_channel(&port, UART011_LCRH as u32);
+    }
+
+    fn pl011_allocate_irq(port: &UartPort) -> Result<irq::Registration<PL011Irq>> {
+        let pl011_port = unsafe { *port.as_ptr() };
+        let data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+        request_irq(pl011_port.irq, unsafe { <Box<UartPort> as ForeignOwnable>::from_foreign(port.as_ptr() as *const c_void) } )
     }
 }
 
@@ -662,8 +670,15 @@ impl UartPortOps for PL011Device {
         let retval = Self::poll_init(_port);
         if retval != 0 {
             data.clk.disable_unprepare();
+            return retval;
         }
-        todo!()
+        let res = Self::pl011_allocate_irq(&_port);
+        if res.is_err() {
+            data.clk.disable_unprepare();
+            return 1;
+        }
+        return 0;
+        // TODO
     }
 
     #[doc = " * @shutdown:     shutdown the UART"]
@@ -680,6 +695,11 @@ impl UartPortOps for PL011Device {
         }
 
         unsafe { bindings::free_irq(port.irq, _port.as_ptr() as *mut c_void) };
+
+        Self::pl011_disable_uart(&_port);
+        data.clk.disable_unprepare();
+        unsafe { bindings::pinctrl_pm_select_sleep_state(port.dev) };
+        // TODO
     }
 
     #[doc = " * @flush_buffer: flush the UART buffer"]
@@ -779,7 +799,6 @@ impl UartPortOps for PL011Device {
         Self::pl011_write(UART011_RTIM | UART011_RXIM, port.membase, UART011_IMSC as usize, port.iotype);
 
         // TODO: Implement amba_pl011_data
-        let plat = unsafe { bindings::dev_get_drvdata(port.dev) };
         return 0;
     }
 
@@ -802,12 +821,6 @@ impl UartPortOps for PL011Device {
         }
         return Self::pl011_read(port.membase, UART01X_DR as usize, port.iotype) as i32;
     }
-}
-
-struct IrqPrivateData {
-    pl011_hw_ops: Arc<PL011Device>,
-    port: Box<UartPort>,
-    device_data: Box<PL011DeviceData>
 }
 
 struct PL011Irq;
@@ -876,4 +889,8 @@ impl irq::Handler for PL011Irq {
             irq::Return::Handled
         }
     }
+}
+
+fn request_irq(irq: u32, data: Box<UartPort>) -> Result<irq::Registration<PL011Irq>> {
+    irq::Registration::try_new(irq, data, irq::flags::SHARED, fmt!("uart-pl011"))
 }

@@ -23,6 +23,7 @@
 #include "asm-generic/int-ll64.h"
 #include "linux/compiler.h"
 #include "linux/delay.h"
+#include "linux/interrupt.h"
 #include "linux/pinctrl/consumer.h"
 #include "linux/serial_core.h"
 #include "linux/tty_flip.h"
@@ -457,6 +458,12 @@ int rust_helper_pinctrl_pm_select_default_state(struct device *dev)
 }
 EXPORT_SYMBOL_GPL(rust_helper_pinctrl_pm_select_default_state);
 
+void rust_helper_pinctrl_pm_select_sleep_state(struct device *dev)
+{
+	pinctrl_pm_select_sleep_state(dev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_pinctrl_pm_select_sleep_state);
+
 void rust_helper_cpu_relax(void)
 {
 	cpu_relax();
@@ -469,9 +476,9 @@ void rust_helper_tty_flip_buffer_push(struct tty_port *port)
 }
 EXPORT_SYMBOL_GPL(rust_helper_tty_flip_buffer_push);
 
-void rust_helper_uart_handle_sysrq_char(struct uart_port *port, u8 ch)
+int rust_helper_uart_handle_sysrq_char(struct uart_port *port, u8 ch)
 {
-	uart_handle_sysrq_char(port, ch);
+	return uart_handle_sysrq_char(port, ch);
 }
 EXPORT_SYMBOL_GPL(rust_helper_uart_handle_sysrq_char);
 
@@ -504,6 +511,12 @@ void rust_helper_mdelay(uint32_t msecs)
 	mdelay(msecs);
 }
 EXPORT_SYMBOL_GPL(rust_helper_mdelay);
+
+int rust_helper_request_irq(unsigned int irq, irq_handler_t handler, unsigned long flags, const char *name, void *dev)
+{
+	return request_irq(irq, handler, flags, name, dev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_request_irq);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

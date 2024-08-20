@@ -168,6 +168,10 @@ impl Device {
         let rev = dev.periphid >> 24 & 0x0f;
         return Some(rev)
     }
+
+    pub fn as_ptr(&self) -> *mut bindings::amba_device {
+        self.ptr
+    }
 }
 
 // SAFETY: The device returned by `raw_device` is the raw Amba device.

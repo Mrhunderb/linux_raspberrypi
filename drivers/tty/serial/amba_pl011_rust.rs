@@ -4,12 +4,12 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{clone::Clone, ffi::c_void, ptr::null, result::Result::Ok, u32};
+use core::{borrow::{Borrow, BorrowMut}, ffi::{c_char, c_void}, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
-    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, device::{self, Data, Device}, driver::DeviceRemoval, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, prelude::*, print, serial:: {
+    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, define_of_id_table, device::{self, Data, Device, RawDevice}, driver::{self, DeviceRemoval}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, module_of_id_table, new_device_data, prelude::{Box, *}, print, serial:: {
         pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}
-    }, sync::Arc, types::ForeignOwnable
+    }, sync::UniqueArc, types::ForeignOwnable
 };
 
 const UART_SIZE: usize = 0x200;
@@ -104,11 +104,10 @@ pub(crate) static VENDOR_DATA: VendorData = VendorData {
     fixfixed_options:     false,
 };
 
+#[derive(Clone, Copy)]
 struct PL011Data {
-    reg_offset: u16,
     im: u32,
     old_status: u32,
-    clk: Clk,
     fifosize: u32,
     fixed_baud:u32,
     type_ : [i8; 12],
@@ -124,17 +123,28 @@ struct PL011Resources {
 type PL011Registrations = PortRegistration<PL011Device>;
 type PL011DeviceData = device::Data<PL011Registrations, PL011Resources, PL011Data>;
 
+struct AmbaDeviceData{
+    dev_data: Pin<UniqueArc<PL011DeviceData>>
+}
+
+impl driver::DeviceRemoval for AmbaDeviceData {
+    fn device_remove(&self) {
+        pr_info!("********* PL011 data released *********\n");
+    }
+}
+
 // Linux Raw id table
 define_amba_id_table! {MY_AMDA_ID_TABLE, (), [
     ({id: 0x00041011, mask: 0x000fffff}, None),
 ]}
 
+module_amba_id_table!(UART_MOD_TABLE, MY_AMDA_ID_TABLE);
 struct PL011Driver;
 impl amba::Driver for PL011Driver {
-    // type Data = Arc<PL011DeviceData>;
+    type Data = Box<AmbaDeviceData>;
 
     kernel::driver_amba_id_table!(MY_AMDA_ID_TABLE);
-    fn probe(adev: &mut amba::Device, _data: Option<&Self::IdInfo>) -> Result {
+    fn probe(adev: &mut amba::Device, _data: Option<&Self::IdInfo>) -> Result<Self::Data> {
         dev_info!(adev,"{} PL061 GPIO chip (probe)\n",adev.name());
         dbg!("********** PL061 GPIO chip (probe) *********\n");
 
@@ -157,19 +167,52 @@ impl amba::Driver for PL011Driver {
         dev_info!(adev,"irq is {}\n",irq);
         let has_sysrq = 1;
         let flags = UPF_BOOT_AUTOCONF;
-        let port =  UartPort::new().setup(
-                membase, 
-                mapbase, 
-                irq,
-                iotype,
-                flags, 
-                has_sysrq,
-                fifosize,
-             portnr as _,
-            );     
+        let index = pl011_probe_dt_alias(portnr as i32, dev);
+        let port =  Box::try_new(UartPort::new().setup(
+            membase, 
+            mapbase, 
+            irq,
+            iotype,
+            flags, 
+            has_sysrq,
+            fifosize,
+            index as _,
+        ))?;
 
-        dbg!("********* PL061 GPIO chip registered *********\n");
-        Ok(())
+        let rev = adev.revision_get().unwrap();
+        let type_:[i8; 12] = [
+            'P' as _, 'L' as _, '0' as _, '1' as _, '1' as _, ' ' as _, 
+            'r' as _, 'e' as _, 'v' as _, (rev+48) as _, 0, 0,   
+        ];
+        let pl011_data = PL011Data{
+            im: 0,
+            old_status: 0,
+            fifosize,
+            fixed_baud: 0,
+            type_,
+            rs485_tx_started: false,
+            rs485_tx_drain_interval: 0,
+        };
+
+        let pl011_res = PL011Resources{
+            base: reg_mem,
+            parent_irq: irq,
+        };
+
+        let mut pl011_reg = PL011Registrations::new(*port);
+        // let mut port_reg = Box::try_new(pl011_reg)?;
+        let mut pin = unsafe { Pin::new_unchecked(&mut pl011_reg) };
+        PL011Device::pl011_write(0, membase, UART011_IMSC as usize, iotype);
+        PL011Device::pl011_write(0xffff, membase, UART011_ICR as usize, iotype);
+        pin.as_mut().register(adev, &UART_DRIVER, Box::try_new(pl011_data)?)?;
+        // PL011Registrations::register(pin, dev.raw_device(), &UART_DRIVER, Box::try_new(pl011_data)?)?;
+
+        unsafe { PORTS[index as usize] = Some(*port) };
+
+        let dev_data = new_device_data!(pl011_reg, pl011_res, pl011_data, "ttyAMBA")?;
+        Ok(Box::try_new(AmbaDeviceData{
+            dev_data
+        })?)
     }
 
     fn remove(_data: &Self::Data) {
@@ -185,7 +228,8 @@ module_amba_driver! {
     initcall: "arch",
 }
 
-struct PL011Device;
+struct PL011Device{}
+
 impl PL011Device {
     /// Find available driver ports sequentially.
     fn pl011_find_free_port() -> Result<usize>{
@@ -669,12 +713,12 @@ impl UartPortOps for PL011Device {
         };
         let retval = Self::poll_init(_port);
         if retval != 0 {
-            data.clk.disable_unprepare();
+            // data.clk.disable_unprepare();
             return retval;
         }
         let res = Self::pl011_allocate_irq(&_port);
         if res.is_err() {
-            data.clk.disable_unprepare();
+            // data.clk.disable_unprepare();
             return 1;
         }
         return 0;
@@ -697,7 +741,6 @@ impl UartPortOps for PL011Device {
         unsafe { bindings::free_irq(port.irq, _port.as_ptr() as *mut c_void) };
 
         Self::pl011_disable_uart(&_port);
-        data.clk.disable_unprepare();
         unsafe { bindings::pinctrl_pm_select_sleep_state(port.dev) };
         // TODO
     }
@@ -780,16 +823,16 @@ impl UartPortOps for PL011Device {
 
     #[doc = " #[cfg(CONFIG_CONSOLE_POLL)]"]
     fn poll_init(uart_port: &UartPort) -> i32 {
-        let mut port = unsafe { *uart_port.as_ptr() };
+        let port = unsafe { *uart_port.as_ptr() };
         let mut data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
         };
         unsafe { bindings::pinctrl_pm_select_default_state(port.dev) };
-        let ret = data.clk.prepare_enable();
-        if ret.is_err() {
-            return 0;
-        }
-        port.uartclk = data.clk.get_rate() as u32;
+        // let ret = data.clk.prepare_enable();
+        // if ret.is_err() {
+        //     return 0;
+        // }
+        // port.uartclk = data.clk.get_rate() as u32;
         dbg!("====Serial: uartclk is {}", port.uartclk);
         Self::pl011_write(UART011_OEIS | UART011_BEIS | UART011_PEIS | 
                 UART011_FEIS | UART011_RTIS | UART011_RXIS, 
@@ -893,4 +936,34 @@ impl irq::Handler for PL011Irq {
 
 fn request_irq(irq: u32, data: Box<UartPort>) -> Result<irq::Registration<PL011Irq>> {
     irq::Registration::try_new(irq, data, irq::flags::SHARED, fmt!("uart-pl011"))
+}
+
+fn pl011_probe_dt_alias(index: i32, dev: device::Device) -> i32 {
+	let mut seen_dev_with_alias = false;
+	let mut seen_dev_without_alias = false;
+    if bindings::CONFIG_OF == 0 {
+        return index;
+    }
+    let raw_dev = unsafe { *dev.raw_device() };
+    let np = raw_dev.of_node;
+    if !np.is_null() {
+        return index;
+    }
+    let mut ret = unsafe { bindings::of_alias_get_id(np, "serial".as_ptr() as *const _) };
+    if ret < 0 {
+        seen_dev_without_alias = true;
+        ret = index;
+    } else {
+        seen_dev_with_alias = true;
+        if ret >= UART_NR as i32 || unsafe { !PORTS[ret as usize].is_none() } {
+            dev_warn!(&dev, "alias 'serial' has invalid index {}\n", ret);
+            return index;
+        }
+    }
+
+    if seen_dev_with_alias && seen_dev_without_alias {
+        dev_warn!(&dev, "aliased and non-aliased serial devices found in device tree. Serial port enumeration may be unpredictable.\n");
+    }
+
+    ret
 }

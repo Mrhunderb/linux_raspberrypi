@@ -518,6 +518,12 @@ int rust_helper_request_irq(unsigned int irq, irq_handler_t handler, unsigned lo
 }
 EXPORT_SYMBOL_GPL(rust_helper_request_irq);
 
+uint rust_helper_amba_rev(struct amba_device * dev)
+{
+	return amba_rev(dev);
+}
+EXPORT_SYMBOL_GPL(rust_helper_amba_rev);
+
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can
  * use it in contexts where Rust expects a `usize` like slice (array) indices.

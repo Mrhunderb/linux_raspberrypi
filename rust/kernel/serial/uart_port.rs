@@ -7,12 +7,7 @@
 use super::uart_driver::UartDriver;
 
 use crate::{
-    bindings, 
-    dev_err, 
-    error::{code::*, Result}, 
-    device, 
-    pr_err, pr_warn, 
-    types::ForeignOwnable,
+    bindings, dev_err, dev_info, device, error::{code::*, Result}, pr_err, pr_warn, types::ForeignOwnable
 };
 
 use core::{ 
@@ -184,9 +179,9 @@ impl<T: UartPortOps> PortRegistration<T> {
     /// Creates a new [`ResetRegistration`] but does not register it yet.
     ///
     /// It is allowed to move.
-    pub fn new() -> Self {
+    pub fn new(port: UartPort) -> Self {
         Self {
-            uart_port: UartPort::new(),
+            uart_port: port,
             dev: None,
             is_registered: false,
             _p: PhantomData,
@@ -201,7 +196,6 @@ impl<T: UartPortOps> PortRegistration<T> {
         self: Pin<&mut Self>,
         dev:  &dyn device::RawDevice,
         uart: &'static UartDriver,
-        index:usize,
         data: T::Data,
     ) -> Result {
         // SAFETY: We never move out of `this`.
@@ -212,15 +206,12 @@ impl<T: UartPortOps> PortRegistration<T> {
         }
         let port = &mut this.uart_port;
         port.0.dev = dev.raw_device();
-            // port.irq = irq;
-            // port.membase = membase;
-            // port.mapbase = mapbase;
-            // port.flags = flags;
-            // port.line = index;
         port.0.ops = Adapter::<T>::build();
         port.0.private_data = <T::Data as ForeignOwnable>::into_foreign(data) as *mut c_void;
 
+        dev_info!(dev, "irq: {}\n", port.0.irq);
         let ret = unsafe {bindings::uart_add_one_port(uart.as_ptr(), port.as_ptr())};
+        dev_info!(dev, "uart_add_one_port returned {}\n", ret);
         if ret < 0 {
             // SAFETY: `data_pointer` was returned by `into_foreign` above.
             dev_err!(dev, "Failed to add AMBA-PL011 port driver\n");
@@ -236,7 +227,7 @@ impl <T: UartPortOps> Drop for PortRegistration<T> {
     fn drop(&mut self) {
         // Free data as well.
         // SAFETY: `data_pointer` was returned by `into_foreign` during registration.
-        pr_err!("uart port dropped.\n")
+        pr_warn!("uart port dropped.\n")
     }
 }
 

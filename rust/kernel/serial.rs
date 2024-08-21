@@ -6,6 +6,8 @@
 //! wrapped for usage by Rust code in the kernel.
 
 
+pub mod tty_driver;
+pub mod uart_state;
 pub mod uart_port;
 pub mod uart_console;
 pub mod uart_driver;

@@ -4,11 +4,11 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{borrow::{Borrow, BorrowMut}, ffi::{c_char, c_void}, ptr::null, result::Result::Ok, u32};
+use core::{borrow::{Borrow, BorrowMut}, clone::Clone, ffi::{c_char, c_void}, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, define_of_id_table, device::{self, Data, Device, RawDevice}, driver::{self, DeviceRemoval}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, module_of_id_table, new_device_data, prelude::{Box, *}, print, serial:: {
-        pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}
+        pl011_config::*, tty_driver::TTYDriver, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}, uart_state::UartState
     }, sync::UniqueArc, types::ForeignOwnable
 };
 
@@ -50,7 +50,9 @@ pub(crate) static UART_DRIVER: UartDriver = UartDriver::new(
     &THIS_MODULE, 
     DRIVER_NAME, 
     DEV_NAME,
-    &AMBA_CONSOLE
+    &AMBA_CONSOLE,
+    &UartState::new(),
+    &TTYDriver::new(),
     ).with_config(
         AMBA_MAJOR, 
         AMBA_MINOR, 
@@ -113,6 +115,7 @@ struct PL011Data {
     type_ : [i8; 12],
     rs485_tx_started: bool,
     rs485_tx_drain_interval: u32,
+    vendor: VendorData,
 }
 
 struct PL011Resources {
@@ -149,7 +152,6 @@ impl amba::Driver for PL011Driver {
         dbg!("********** PL061 GPIO chip (probe) *********\n");
 
         let dev = device::Device::from_dev(adev);
-
         let portnr = PL011Device::pl011_find_free_port()?;
         dev_info!(adev,"portnr is {}\n",portnr);
         let clk = dev.clk_get().unwrap();  // 获得clk
@@ -167,7 +169,8 @@ impl amba::Driver for PL011Driver {
         dev_info!(adev,"irq is {}\n",irq);
         let has_sysrq = 1;
         let flags = UPF_BOOT_AUTOCONF;
-        let index = pl011_probe_dt_alias(portnr as i32, dev);
+        let index = pl011_probe_dt_alias(portnr as i32, dev.clone());
+        dev_info!(adev,"index is {}\n",index);
         let port =  Box::try_new(UartPort::new().setup(
             membase, 
             mapbase, 
@@ -192,6 +195,7 @@ impl amba::Driver for PL011Driver {
             type_,
             rs485_tx_started: false,
             rs485_tx_drain_interval: 0,
+            vendor: VENDOR_DATA,
         };
 
         let pl011_res = PL011Resources{
@@ -204,6 +208,7 @@ impl amba::Driver for PL011Driver {
         let mut pin = unsafe { Pin::new_unchecked(&mut pl011_reg) };
         PL011Device::pl011_write(0, membase, UART011_IMSC as usize, iotype);
         PL011Device::pl011_write(0xffff, membase, UART011_ICR as usize, iotype);
+
         pin.as_mut().register(adev, &UART_DRIVER, Box::try_new(pl011_data)?)?;
         // PL011Registrations::register(pin, dev.raw_device(), &UART_DRIVER, Box::try_new(pl011_data)?)?;
 

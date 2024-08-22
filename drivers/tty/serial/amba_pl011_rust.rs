@@ -4,11 +4,11 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{borrow::{Borrow, BorrowMut}, clone::Clone, ffi::{c_char, c_void}, ptr::null, result::Result::Ok, u32};
+use core::{borrow::{Borrow, BorrowMut}, clone::Clone, ffi::{c_char, c_void}, ptr::{null, null_mut}, result::Result::Ok, u32};
 
 use kernel::{
     amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, define_of_id_table, device::{self, Data, Device, RawDevice}, driver::{self, DeviceRemoval}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, module_of_id_table, new_device_data, prelude::{Box, *}, print, serial:: {
-        pl011_config::*, tty_driver::TTYDriver, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}, uart_state::UartState
+        pl011_config::*, tty_driver::TTYDriver, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}, uart_state::{self, UartState}
     }, sync::UniqueArc, types::ForeignOwnable
 };
 
@@ -45,14 +45,14 @@ static AMBA_CONSOLE: Console = {
     ) 
 };
 
+static mut IS_IN: bool = false;
+
 /// This uart_driver static's struct
 pub(crate) static UART_DRIVER: UartDriver = UartDriver::new(
     &THIS_MODULE, 
     DRIVER_NAME, 
     DEV_NAME,
     &AMBA_CONSOLE,
-    &UartState::new(),
-    &TTYDriver::new(),
     ).with_config(
         AMBA_MAJOR, 
         AMBA_MINOR, 
@@ -209,6 +209,16 @@ impl amba::Driver for PL011Driver {
         PL011Device::pl011_write(0, membase, UART011_IMSC as usize, iotype);
         PL011Device::pl011_write(0xffff, membase, UART011_ICR as usize, iotype);
 
+        let uart_drv = unsafe { &mut *UART_DRIVER.as_ptr() };
+        if !unsafe { IS_IN } {
+            dev_info!(dev, "==================================================================================================================================== state at {:p}", uart_drv.state);
+            let ret = unsafe { bindings::uart_register_driver(UART_DRIVER.as_ptr()) };
+            if ret < 0 {
+                pr_err!("Failed to register uart driver\n");
+                return Err(EINVAL);
+            }
+            unsafe { IS_IN = true };
+        }
         pin.as_mut().register(adev, &UART_DRIVER, Box::try_new(pl011_data)?)?;
         // PL011Registrations::register(pin, dev.raw_device(), &UART_DRIVER, Box::try_new(pl011_data)?)?;
 

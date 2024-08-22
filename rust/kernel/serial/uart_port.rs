@@ -211,14 +211,6 @@ impl<T: UartPortOps> PortRegistration<T> {
         port.0.private_data = <T::Data as ForeignOwnable>::into_foreign(data) as *mut c_void;
         dev_info!(dev, "irq: {}\n", port.0.irq);
 
-        let uart_drv = unsafe { &mut *uart.as_ptr() };
-
-        let ret = unsafe { bindings::uart_register_driver(uart.as_ptr()) };
-        if ret < 0 {
-            pr_err!("Failed to register uart driver\n");
-            return Err(EINVAL);
-        }
-
         let ret = unsafe { bindings::uart_add_one_port(uart.as_ptr(), port.as_ptr()) };
         dev_info!(dev, "uart_add_one_port returned {}\n", ret);
         if ret < 0 {

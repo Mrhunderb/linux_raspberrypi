@@ -16,6 +16,7 @@
  * and hooked into this driver.
  */
 
+#include "linux/printk.h"
 #include <linux/module.h>
 #include <linux/ioport.h>
 #include <linux/init.h>
@@ -1428,6 +1429,7 @@ static int pl011_register_port(struct uart_amba_port *uap)
 	pl011_write(0, uap, REG_IMSC);
 	pl011_write(0xffff, uap, REG_ICR);
 
+	printk("*************************************************************************************************************** state is null %d", !amba_reg.state);
 	if (!amba_reg.state) {
 		ret = uart_register_driver(&amba_reg);
 		if (ret < 0) {

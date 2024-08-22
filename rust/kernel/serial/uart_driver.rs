@@ -25,7 +25,7 @@ pub struct UartDriver(bindings::uart_driver);
 
 impl UartDriver {
     /// Create a new [`UartDriver`]
-    pub const fn new(owner: &'static ThisModule, driver_name: &'static CStr, dev_name: &'static CStr, reg: &Console, state: &UartState, tty: &TTYDriver ) -> Self{
+    pub const fn new(owner: &'static ThisModule, driver_name: &'static CStr, dev_name: &'static CStr, reg: &Console ) -> Self{
         // SAFETY: `console` is a C structure holding data that has been initialized with 0s,
         // hence it is safe to use as-is.
         let mut uart_driver = unsafe { MaybeUninit::<bindings::uart_driver>::zeroed().assume_init() };
@@ -33,6 +33,8 @@ impl UartDriver {
         uart_driver.driver_name = driver_name.as_char_ptr();
         uart_driver.dev_name = dev_name.as_char_ptr();
         uart_driver.cons = reg.as_ptr();
+        uart_driver.state = null_mut();
+        uart_driver.tty_driver = null_mut();
         Self(uart_driver)
     }
 

@@ -4,12 +4,23 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{borrow::{Borrow, BorrowMut}, clone::Clone, ffi::{c_char, c_void}, ptr::{null, null_mut}, result::Result::Ok, u32};
+use core::{clone::Clone, ffi::c_void, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
-    amba, bindings, c_str, clk::{self, Clk}, define_amba_id_table, define_of_id_table, device::{self, Data, Device, RawDevice}, driver::{self, DeviceRemoval}, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, module_of_id_table, new_device_data, prelude::{Box, *}, print, serial:: {
-        pl011_config::*, tty_driver::TTYDriver, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}, uart_state::{self, UartState}
-    }, sync::UniqueArc, types::ForeignOwnable
+    amba, bindings, c_str, 
+    define_amba_id_table, 
+    device::{self, RawDevice}, 
+    driver,
+    driver_amba_id_table, 
+    error::{code::*, Result}, 
+    io_mem::IoMem, irq, 
+    module_amba_driver, 
+    module_amba_id_table,
+    new_device_data, 
+    prelude::{Box, *}, 
+    serial:: {pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}},
+    sync::UniqueArc, 
+    types::ForeignOwnable
 };
 
 const UART_SIZE: usize = 0x200;
@@ -45,7 +56,7 @@ static AMBA_CONSOLE: Console = {
     ) 
 };
 
-static mut IS_IN: bool = false;
+static mut IS_INIT: bool = false;
 
 /// This uart_driver static's struct
 pub(crate) static UART_DRIVER: UartDriver = UartDriver::new(
@@ -143,6 +154,38 @@ define_amba_id_table! {MY_AMDA_ID_TABLE, (), [
 
 module_amba_id_table!(UART_MOD_TABLE, MY_AMDA_ID_TABLE);
 struct PL011Driver;
+
+impl PL011Driver {
+    fn pl011_probe_dt_alias(index: i32, dev: device::Device) -> i32 {
+        let mut seen_dev_with_alias = false;
+        let mut seen_dev_without_alias = false;
+        if bindings::CONFIG_OF == 0 {
+            return index;
+        }
+        let raw_dev = unsafe { *dev.raw_device() };
+        let np = raw_dev.of_node;
+        if !np.is_null() {
+            return index;
+        }
+        let mut ret = unsafe { bindings::of_alias_get_id(np, "serial".as_ptr() as *const _) };
+        if ret < 0 {
+            seen_dev_without_alias = true;
+            ret = index;
+        } else {
+            seen_dev_with_alias = true;
+            if ret >= UART_NR as i32 || unsafe { !PORTS[ret as usize].is_none() } {
+                dev_warn!(&dev, "alias 'serial' has invalid index {}\n", ret);
+                return index;
+            }
+        }
+
+        if seen_dev_with_alias && seen_dev_without_alias {
+            dev_warn!(&dev, "aliased and non-aliased serial devices found in device tree. Serial port enumeration may be unpredictable.\n");
+        }
+        ret
+    }
+    
+}
 impl amba::Driver for PL011Driver {
     type Data = Box<AmbaDeviceData>;
 
@@ -154,7 +197,7 @@ impl amba::Driver for PL011Driver {
         let dev = device::Device::from_dev(adev);
         let portnr = PL011Device::pl011_find_free_port()?;
         dev_info!(adev,"portnr is {}\n",portnr);
-        let clk = dev.clk_get().unwrap();  // 获得clk
+        let _clk = dev.clk_get().unwrap();  // 获得clk
         let fifosize = if adev.revision_get().unwrap() < 3 {16} else {32};
         let iotype = UPIO_MEM as u8;
         let reg_base = adev.take_resource().ok_or(ENXIO)?;
@@ -169,7 +212,7 @@ impl amba::Driver for PL011Driver {
         dev_info!(adev,"irq is {}\n",irq);
         let has_sysrq = 1;
         let flags = UPF_BOOT_AUTOCONF;
-        let index = pl011_probe_dt_alias(portnr as i32, dev.clone());
+        let index = Self::pl011_probe_dt_alias(portnr as i32, dev.clone());
         dev_info!(adev,"index is {}\n",index);
         let port =  Box::try_new(UartPort::new().setup(
             membase, 
@@ -209,15 +252,13 @@ impl amba::Driver for PL011Driver {
         PL011Device::pl011_write(0, membase, UART011_IMSC as usize, iotype);
         PL011Device::pl011_write(0xffff, membase, UART011_ICR as usize, iotype);
 
-        let uart_drv = unsafe { &mut *UART_DRIVER.as_ptr() };
-        if !unsafe { IS_IN } {
-            dev_info!(dev, "==================================================================================================================================== state at {:p}", uart_drv.state);
+        if !unsafe { IS_INIT } {
             let ret = unsafe { bindings::uart_register_driver(UART_DRIVER.as_ptr()) };
             if ret < 0 {
                 pr_err!("Failed to register uart driver\n");
                 return Err(EINVAL);
             }
-            unsafe { IS_IN = true };
+            unsafe { IS_INIT = true };
         }
         pin.as_mut().register(adev, &UART_DRIVER, Box::try_new(pl011_data)?)?;
         // PL011Registrations::register(pin, dev.raw_device(), &UART_DRIVER, Box::try_new(pl011_data)?)?;
@@ -723,7 +764,7 @@ impl UartPortOps for PL011Device {
     #[doc = " * @startup:      start the UART"]
     fn startup(_port: &UartPort) -> i32 {
         let port = unsafe { *_port.as_ptr() };
-        let data: Box<PL011Data> = unsafe {
+        let _data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
         };
         let retval = Self::poll_init(_port);
@@ -953,32 +994,3 @@ fn request_irq(irq: u32, data: Box<UartPort>) -> Result<irq::Registration<PL011I
     irq::Registration::try_new(irq, data, irq::flags::SHARED, fmt!("uart-pl011"))
 }
 
-fn pl011_probe_dt_alias(index: i32, dev: device::Device) -> i32 {
-	let mut seen_dev_with_alias = false;
-	let mut seen_dev_without_alias = false;
-    if bindings::CONFIG_OF == 0 {
-        return index;
-    }
-    let raw_dev = unsafe { *dev.raw_device() };
-    let np = raw_dev.of_node;
-    if !np.is_null() {
-        return index;
-    }
-    let mut ret = unsafe { bindings::of_alias_get_id(np, "serial".as_ptr() as *const _) };
-    if ret < 0 {
-        seen_dev_without_alias = true;
-        ret = index;
-    } else {
-        seen_dev_with_alias = true;
-        if ret >= UART_NR as i32 || unsafe { !PORTS[ret as usize].is_none() } {
-            dev_warn!(&dev, "alias 'serial' has invalid index {}\n", ret);
-            return index;
-        }
-    }
-
-    if seen_dev_with_alias && seen_dev_without_alias {
-        dev_warn!(&dev, "aliased and non-aliased serial devices found in device tree. Serial port enumeration may be unpredictable.\n");
-    }
-
-    ret
-}

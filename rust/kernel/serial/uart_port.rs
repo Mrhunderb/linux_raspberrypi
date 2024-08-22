@@ -222,6 +222,28 @@ impl<T: UartPortOps> PortRegistration<T> {
         this.is_registered = true;
         Ok(())
     }
+
+    pub fn unregister(
+        self: Pin<&mut Self>,
+        uart: &'static UartDriver
+    ) {
+        // SAFETY: We never move out of `this`.
+        let this = unsafe { self.get_unchecked_mut() };
+        if !this.is_registered {
+            pr_warn!("this uart port driver is not registered\n");
+            return;
+        }
+        let port = &mut this.uart_port;
+        let dev = this.dev.take().unwrap();
+        dev_info!(dev, "irq: {}\n", port.0.irq);
+        unsafe { bindings::uart_remove_one_port(uart.as_ptr(), port.as_ptr()) };
+        // SAFETY: `data_pointer` was returned by `into_foreign` during registration.
+        this.is_registered = false;
+    }
+
+    pub fn get_port(&self) -> &UartPort {
+        &self.uart_port
+    }
 }
 
 impl <T: UartPortOps> Drop for PortRegistration<T> {

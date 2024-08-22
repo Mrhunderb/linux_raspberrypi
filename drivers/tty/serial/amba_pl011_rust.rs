@@ -4,7 +4,7 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{clone::Clone, ffi::c_void, ptr::null, result::Result::Ok, u32};
+use core::{clone::Clone, convert::AsRef, ffi::c_void, ops::{Deref, DerefMut}, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
     amba, bindings, c_str, 
@@ -261,7 +261,6 @@ impl amba::Driver for PL011Driver {
             unsafe { IS_INIT = true };
         }
         pin.as_mut().register(adev, &UART_DRIVER, Box::try_new(pl011_data)?)?;
-        // PL011Registrations::register(pin, dev.raw_device(), &UART_DRIVER, Box::try_new(pl011_data)?)?;
 
         unsafe { PORTS[index as usize] = Some(*port) };
 
@@ -273,6 +272,18 @@ impl amba::Driver for PL011Driver {
 
     fn remove(_data: &Self::Data) {
         dbg!("********* PL061 GPIO chip removed *********\n");
+        let data = _data.as_ref().dev_data.deref();
+        let mut binding = data.registrations().unwrap();
+        let reg = binding.deref_mut();
+        let mut pin = unsafe { Pin::new_unchecked(reg) };
+        pin.unregister(&UART_DRIVER);
+        let uart_port = unsafe { *binding.deref_mut().get_port().as_ptr() };
+        for (index, _) in unsafe { PORTS.iter().enumerate() } {
+            if index == uart_port.line as usize {
+                unsafe { PORTS[index] = None };
+                break;
+            }
+        }
     }
 }
 

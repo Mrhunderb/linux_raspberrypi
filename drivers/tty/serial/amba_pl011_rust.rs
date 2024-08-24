@@ -4,7 +4,7 @@
 //!
 //! Based on the C driver written by ARM Ltd/Deep Blue Solutions Ltd.
 
-use core::{clone::Clone, convert::AsRef, ffi::c_void, ops::{Deref, DerefMut}, ptr::null, result::Result::Ok, u32};
+use core::{clone::Clone, convert::AsRef, ffi::{c_uchar, c_void}, ops::{Deref, DerefMut}, option::Option::Some, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
     amba, bindings, c_str, 
@@ -72,17 +72,163 @@ pub(crate) static UART_DRIVER: UartDriver = UartDriver::new(
 
 /// This is Struct of pl011_console
 struct Pl011Console;
+impl Pl011Console {
+    extern "C" fn pl011_console_putchar(port_ptr: *mut bindings::uart_port, ch: c_uchar) {
+        let port = unsafe { *port_ptr };
+        while PL011Device::pl011_read(port.membase, UART01X_FR as usize, port.iotype) & UART01X_FR_TXFF != 0 {
+            unsafe { bindings::cpu_relax() }; // CPU 进入低功耗状态
+        }
+        PL011Device::pl011_write(ch as u32, port.membase, UART01X_DR as usize, port.iotype); // 将字符写入数据寄存器
+    }
+
+    fn pl011_console_get_options(uap: &UartPort, baud: &mut i32, parity: &mut i32, bits: &mut i32) {
+        let port = unsafe { *uap.as_ptr() };
+        if PL011Device::pl011_read(port.membase, UART011_CR as usize, port.iotype) & UART01X_CR_UARTEN != 0 {  // 检查 UART 是否启用
+            let lcr_h = PL011Device::pl011_read(port.membase, UART011_LCRH as usize, port.iotype); // 读取行控制寄存器
+
+            *parity = 'n' as i32;
+            if lcr_h & UART01X_LCRH_PEN != 0 { // 检查是否启用奇偶校验
+                if lcr_h & UART01X_LCRH_EPS != 0 {
+                    *parity = 'e' as i32; // 启用偶校验
+                } else {
+                    *parity = 'o' as i32; // 启用奇校验
+                }
+
+                if (lcr_h & 0x60) == UART01X_LCRH_WLEN_7 {
+                    *bits = 7; // 数据位为7
+                } else {
+                    *bits = 8; // 数据位为8
+                }
+
+                let ibrd = PL011Device::pl011_read(port.membase, UART011_IBRD as usize, port.iotype); // 读取整数波特率除数
+                let fbrd = PL011Device::pl011_read(port.membase, UART011_FBRD as usize, port.iotype); // 读取小数波特率除数
+
+                let pl011_data: Box<PL011Data> = unsafe {
+                    <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
+                };
+                *baud = (port.uartclk * 4 / (64 * ibrd + fbrd)) as i32; // 计算波特率
+
+                if pl011_data.vendor.oversampling { // 如果启用过采样
+                    if PL011Device::pl011_read(port.membase, UART011_CR as usize, port.iotype) & ST_UART011_CR_OVSFACT != 0 {
+                        *baud *= 2; // 波特率翻倍
+                    }
+                }
+            }
+        }
+    }
+
+    fn pl011_console_setup(co: &Console, options: *mut i8) -> Result<i32> {
+        pr_info!("****pl011_console_setup****\n");
+        let mut baud: i32 = 38400;  // 默认波特率
+        let mut bits: i32 = 8; // 默认数据位
+        let mut parity: i32 = 'n' as i32; // 默认无奇偶校验
+        let mut flow: i32 = 'n' as i32; // 默认无流控
+
+        let co_ptr = unsafe { &mut *co.as_ptr() };
+
+        /*
+         * 检查是否指定了无效的 UART 号，
+         * 如果是，则搜索第一个可用的具有控制台支持的端口。
+         */
+        if co_ptr.index >= UART_NR as i16 {
+            co_ptr.index = 0;
+        }
+
+        if unsafe { &PORTS[co_ptr.index as usize] }.is_none() {
+            return Err(ENODEV);  // 如果端口不存在，返回 -ENODEV
+        }
+        let uap = &unsafe { &PORTS[co_ptr.index as usize] }.unwrap(); // 获取指定索引的端口
+        let uap_ptr = unsafe { &mut *uap.as_ptr() };
+        let pl011_data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(uap_ptr.private_data)
+        };
+
+        let dev = unsafe { device::Device::new(uap_ptr.dev) };
+
+        /* 允许引脚复用并配置 */
+        unsafe { bindings::pinctrl_pm_select_default_state(dev.raw_device()) }; 
+
+        let clk = dev.clk_get().unwrap();
+        clk.prepare_enable()?;  //准备时钟
+
+
+
+        uap_ptr.uartclk = clk.get_rate() as u32; // 获取 UART 时钟频率
+
+        if pl011_data.vendor.fixfixed_options {
+            baud = pl011_data.fixed_baud as i32; // 如果固定波特率选项启用，使用固定波特率
+        } else {
+            if !options.is_null() {
+                unsafe {
+                    bindings::uart_parse_options(options,
+                                                 &mut baud as *mut _,
+                                                 &mut parity as *mut _,
+                                                 &mut bits as *mut _,
+                                                 &mut flow as *mut _); // 解析命令行选项
+                }
+            } else {
+                Self::pl011_console_get_options(uap, &mut baud, &mut parity, &mut bits); // 获取控制台选项
+            }
+        }
+
+        let ret = unsafe { bindings::uart_set_options(uap.as_ptr(), co.as_ptr(), baud, parity, bits, flow) }; // 设置 UART 选项
+
+        if ret == 0 {
+            Ok(0)
+        } else {
+            Err(ENODEV)
+        }
+    }
+}
+
 /// Implement supported `Pl011Console`'s operations here.
 #[vtable]
 impl ConsoleOps for Pl011Console {
     type Data = ();
 
     fn console_write(_co: &Console, _s: *const i8, _count: u32) {
-        pr_info!("console_write ok");
+        pr_info!("pl011 console_write ok");
+        let co_ptr = unsafe { &*_co.as_ptr() };
+        let uap = &unsafe { &PORTS[co_ptr.index as usize] }.unwrap();
+        let uap_ptr = unsafe { &mut *uap.as_ptr() };
+        let pl011_data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(uap_ptr.private_data)
+        };
+        let mut old_cr: u32 = 0;
+        let mut new_cr: u32 = 0;
+        let mut locked = true;
+        let dev =  unsafe { device::Device::new(uap_ptr.dev) };
+        let _= dev.clk_get().unwrap().prepare_enable();
+
+        if uap_ptr.sysrq != 0 {
+            locked = false;
+        } else if unsafe { bindings::oops_in_progress != 0 } {
+            // 如果有故障发生，尝试加锁
+            unsafe { bindings::spin_lock(&uap_ptr.lock as *const _ as *mut _) };
+        } else {
+            unsafe { bindings::spin_lock(&uap_ptr.lock as *const _ as *mut _) };
+        }
+
+        if !pl011_data.vendor.always_enabled {
+            old_cr = PL011Device::pl011_read(uap_ptr.membase, UART011_CR as usize, uap_ptr.iotype);
+            new_cr = old_cr & !UART011_CR_CTSEN;
+            PL011Device::pl011_write(new_cr, uap_ptr.membase, UART011_CR as usize, uap_ptr.iotype);
+        }
+        unsafe { bindings::uart_console_write(uap.as_ptr(), _s, _count, Some(Self::pl011_console_putchar)) }
+
+        while (PL011Device::pl011_read(uap_ptr.membase, UART01X_FR as usize, uap_ptr.iotype) ^ pl011_data.vendor.inv_fr) 
+               & pl011_data.vendor.fr_busy != 0 {
+            unsafe { bindings::cpu_relax() };
+        }
+        if locked {
+            unsafe { bindings::spin_unlock(&mut uap_ptr.lock) };
+        }
+
+        let _ = dev.clk_get().unwrap().disable();
     }
 
     fn console_read(_co: &Console, _s: *mut i8, _count: u32) -> Result<i32>{
-        pr_info!("console_read ok");
+        pr_info!("pl011 console_read ok");
         Ok(0)
     }
 
@@ -92,13 +238,61 @@ impl ConsoleOps for Pl011Console {
         _idx: i32, 
         _options: *mut i8,
     ) -> Result<i32>{
+        let mut iotype: c_uchar = 0;
+        let mut addr: bindings::resource_size_t = 0;
+
+        /*
+         * 受 Qualcomm Technologies QDF2400 E44 勘误影响的系统有一个不同的控制台名称，
+         * 所以需要检查该名称。实际的勘误实现发生在探测函数中。
+         */
+        let name_cstr = unsafe { CStr::from_char_ptr(_name) };
+        let name_str = name_cstr.to_str()?;
+        if name_str != "qdf2400_e44" && name_str != "pl011" { 
+            return Err(ENODEV);  // 如果名称不匹配，返回 -ENODEV
+        }
+
+        // 如果解析早期控制台参数失败，返回 -ENODEV
+        if unsafe {
+            bindings::uart_parse_earlycon(
+                _options,
+                &mut iotype as *mut _,
+                &mut addr as *mut _,
+                _options as *mut *mut _,
+            ) != 0
+        } {
+            return Err(ENODEV); // 如果解析早期控制台参数失败，返回 -ENODEV
+        }
+
+        if u32::from(iotype) != UPIO_MEM && u32::from(iotype) != UPIO_MEM32 {
+            return Err(ENODEV); // 如果 IO 类型不匹配，返回 -ENODEV
+        }
+
+        /* 尝试匹配命令行中指定的端口 */
+        for i in 0..UART_NR {
+            if unsafe { PORTS[i] }.is_none() {
+                continue; // 如果端口为空，继续下一次循环
+            }
+
+            let port = &unsafe { &PORTS[i] }.unwrap(); // 获取 UART 端口
+            let port_ptr = unsafe { &mut *port.as_ptr() };
+
+            if port_ptr.mapbase != addr {
+                continue; // 如果地址不匹配，继续下一次循环
+            }
+
+            let co_ptr = unsafe { &mut *_co.as_ptr() };
+            co_ptr.index = i as i16; // 设置控制台索引
+            port_ptr.cons = co_ptr; // 将控制台关联到端口
+            return Self::pl011_console_setup(_co, _options); // 调用控制台设置函数
+        }
+
         pr_info!("console_match ok");
-        Ok(0)
+        Err(ENODEV)  // 如果没有匹配成功，返回 -ENODEV
     }
 
     fn console_device(_co: &Console, _index: *mut i8) -> *mut bindings::tty_driver{
-        pr_info!("console_device ok");
-        todo!()
+        pr_info!("pl011 console_device ok");
+        unsafe { bindings::uart_console_device(_co.as_ptr(), _index as *mut i32) }
     }
 }
 
@@ -388,8 +582,11 @@ impl PL011Device {
 
     fn pl011_tx_empty(port: &UartPort) -> u32 {
         let pl011_port = unsafe { *port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
         let status = Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype);
-        if status & (VENDOR_DATA.fr_busy|UART01X_FR_TXFF) != 0 {
+        if status & (data.vendor.fr_busy|UART01X_FR_TXFF) != 0 {
             bindings::TIOCSER_TEMT
         } else {
             0
@@ -558,15 +755,37 @@ impl PL011Device {
             unsafe { bindings::uart_handle_dcd_change(port_ptr, status & UART01X_FR_DCD != 0) };
         }
 
-        if delta & VENDOR_DATA.fr_dsr != 0 {
+        if delta & data.vendor.fr_dsr != 0 {
             (unsafe { *port_ptr }).icount.dsr += 1;
         }
 
-        if delta & VENDOR_DATA.fr_cts != 0 {
+        if delta & data.vendor.fr_cts != 0 {
             unsafe { bindings::uart_handle_cts_change(port_ptr,
-                                             status & VENDOR_DATA.fr_cts != 0) }; 
+                                             status & data.vendor.fr_cts != 0) }; 
         }
 	    unsafe { bindings::wake_up_interruptible(&mut (*pl011_port.state).port.delta_msr_wait) };
+    }
+
+    fn pl011_enbale_interrupts(port: &UartPort) {
+        let mut pl011_port = unsafe { *port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        let flags: u64 = 0;
+        unsafe { bindings::spin_lock_irqsave(&mut pl011_port.lock, flags) };
+
+        Self::pl011_write(UART011_RTIS | UART011_RXIS, pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);
+
+        for i in 0..data.fifosize * 2 {
+            if Self::pl011_read(pl011_port.membase, UART01X_FR as usize, pl011_port.iotype) & UART01X_FR_RXFE != 0 {
+                break;
+            }
+            Self::pl011_read(pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+        }
+
+        Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
+
+        unsafe { bindings::spin_unlock_irqrestore(&mut pl011_port.lock, flags) };
     }
 
     fn pl011_disable_interrupts(port: &UartPort) {
@@ -660,6 +879,9 @@ impl UartPortOps for PL011Device {
     #[doc = " * @get_mctrl:    get the modem control register"]
     fn get_mctrl(_port: &UartPort) -> u32 {
         let port = unsafe { *_port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
+        };
         let mut result = 0;
         let status = Self::pl011_read(port.membase, UART01X_FR as usize, port.iotype);
 
@@ -669,9 +891,9 @@ impl UartPortOps for PL011Device {
             }
         };
         tiocmbit(UART01X_FR_DCD, bindings::TIOCM_CAR);
-        tiocmbit(VENDOR_DATA.fr_dsr, bindings::TIOCM_DSR);
-        tiocmbit(VENDOR_DATA.fr_cts, bindings::TIOCM_CTS);
-        tiocmbit(VENDOR_DATA.fr_ri, bindings::TIOCM_RNG);
+        tiocmbit(data.vendor.fr_dsr, bindings::TIOCM_DSR);
+        tiocmbit(data.vendor.fr_cts, bindings::TIOCM_CTS);
+        tiocmbit(data.vendor.fr_ri, bindings::TIOCM_RNG);
 
         return result;
     }
@@ -774,8 +996,8 @@ impl UartPortOps for PL011Device {
 
     #[doc = " * @startup:      start the UART"]
     fn startup(_port: &UartPort) -> i32 {
-        let port = unsafe { *_port.as_ptr() };
-        let _data: Box<PL011Data> = unsafe {
+        let mut port = unsafe { *_port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
         };
         let retval = Self::poll_init(_port);
@@ -788,6 +1010,20 @@ impl UartPortOps for PL011Device {
             // data.clk.disable_unprepare();
             return 1;
         }
+        Self::pl011_write(data.vendor.ifls, port.membase, UART011_IFLS as usize, port.iotype);
+        unsafe { bindings::spin_lock_irq(&mut port.lock) };
+        let mut cr = Self::pl011_read(port.membase, UART011_CR as usize, port.iotype);
+        cr &= UART011_CR_RTS | UART011_CR_DTR;
+        cr |= UART01X_CR_UARTEN | UART011_CR_RXE;
+
+        if port.rs485.flags & SER_RS485_ENABLED == 0 {
+            cr |= UART011_CR_TXE;
+        }
+        Self::pl011_write(cr, port.membase, UART011_CR as usize, port.iotype);
+        unsafe { bindings::spin_unlock_irq(&mut port.lock) };
+        data.old_status = Self::pl011_read(port.membase, UART01X_FR as usize, port.iotype) & UART01X_FR_MODEM_ANY;
+
+        Self::pl011_enbale_interrupts(_port);
         return 0;
         // TODO
     }
@@ -938,7 +1174,10 @@ struct PL011Irq;
 impl PL011Irq {
     fn check_apply_cts_event_workaround(port: &UartPort) {
         let pl011_port = unsafe { *port.as_ptr() };
-        if !VENDOR_DATA.cts_event_workaround {
+        let data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        if !data.vendor.cts_event_workaround {
             return;
         }
         PL011Device::pl011_write(0x00, pl011_port.membase, UART011_ICR as usize, pl011_port.iotype);

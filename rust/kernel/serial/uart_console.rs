@@ -7,9 +7,7 @@
 // use super::uart_port::UartPort;
 
 use crate::{
-    bindings,
-    error::{Result, from_result},
-    types::ForeignOwnable,
+    bindings, error::{from_result, Result}, pr_info, types::ForeignOwnable
 };
 
 use core::mem::MaybeUninit;
@@ -100,10 +98,10 @@ impl Console {
         // hence it is safe to use as-is.
         let mut console = unsafe { MaybeUninit::<bindings::console>::zeroed().assume_init() };
         console.name   = name;
-        console.write  = Some(console_write_callback::<T>);
-        console.read   = Some(console_read_callback::<T>);
-        console.match_ = Some(console_match_callback::<T>);
-        console.device = Some(console_device_callback::<T>);
+        console.write  = Some(Adapter::<T>::console_write_callback);
+        console.read   = Some(Adapter::<T>::console_read_callback);
+        console.match_ = Some(Adapter::<T>::console_match_callback);   
+        console.device = Some(Adapter::<T>::console_device_callback);
         console.data   = reg as _ ;
         Self(console)
     }
@@ -150,45 +148,50 @@ impl Console {
 unsafe impl Send for Console {}
 unsafe impl Sync for Console {}
 
-unsafe extern "C" fn console_write_callback<T: ConsoleOps> (
-    co: *mut bindings::console,
-    s: *const core::ffi::c_char,
-    count: core::ffi::c_uint,
-){
-    let co = unsafe { Console::from_raw(co)};
-    T::console_write(co, s, count);
-}
+pub struct Adapter<T: ConsoleOps>(T);
 
-unsafe extern "C" fn console_read_callback<T: ConsoleOps> (
-    co: *mut bindings::console,
-    s: *mut core::ffi::c_char,
-    count: core::ffi::c_uint,
-) -> core::ffi::c_int{
-    from_result(||{
-        // SAFETY: The value stored as chip data was returned by `into_foreign` during registration.
+impl<T: ConsoleOps> Adapter<T> {
+    unsafe extern "C" fn console_write_callback (
+        co: *mut bindings::console,
+        s: *const core::ffi::c_char,
+        count: core::ffi::c_uint,
+    ){
         let co = unsafe { Console::from_raw(co)};
-        T::console_read(co, s, count)
-    })
-}
+        T::console_write(co, s, count);
+    }
 
-unsafe extern "C" fn console_match_callback<T: ConsoleOps> (
-    co: *mut bindings::console,
-    name: *mut core::ffi::c_char,
-    idx: core::ffi::c_int,
-    options: *mut core::ffi::c_char,
-) -> core::ffi::c_int{
-    from_result(||{
+    unsafe extern "C" fn console_read_callback (
+        co: *mut bindings::console,
+        s: *mut core::ffi::c_char,
+        count: core::ffi::c_uint,
+    ) -> core::ffi::c_int{
+        from_result(||{
+            // SAFETY: The value stored as chip data was returned by `into_foreign` during registration.
+            let co = unsafe { Console::from_raw(co)};
+            T::console_read(co, s, count)
+        })
+    }
+
+    unsafe extern "C" fn console_match_callback (
+        co: *mut bindings::console,
+        name: *mut core::ffi::c_char,
+        idx: core::ffi::c_int,
+        options: *mut core::ffi::c_char,
+    ) -> core::ffi::c_int{
+        from_result(||{
+            let co = unsafe { Console::from_raw(co)};
+            pr_info!("pl011 Console match callback");
+            T::console_match(co, name, idx, options)
+        })
+    }
+
+    unsafe extern "C" fn console_device_callback (
+        co: *mut bindings::console,
+        index: *mut core::ffi::c_int,
+    ) -> *mut bindings::tty_driver {
         let co = unsafe { Console::from_raw(co)};
-        T::console_match(co, name, idx, options)
-    })
-}
-
-unsafe extern "C" fn console_device_callback<T: ConsoleOps> (
-    co: *mut bindings::console,
-    index: *mut core::ffi::c_int,
-) -> *mut bindings::tty_driver {
-    let co = unsafe { Console::from_raw(co)};
-    T::console_device(co, index as *mut i8)
+        T::console_device(co, index as *mut i8)
+    }
 }
 
 // pub mod uart_driver {

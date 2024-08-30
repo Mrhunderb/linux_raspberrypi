@@ -7,20 +7,7 @@
 use core::{clone::Clone, convert::AsRef, ffi::{c_uchar, c_void}, ops::{Deref, DerefMut}, option::Option::Some, ptr::null, result::Result::Ok, u32};
 
 use kernel::{
-    amba, bindings, c_str, 
-    define_amba_id_table, 
-    device::{self, RawDevice}, 
-    driver,
-    driver_amba_id_table, 
-    error::{code::*, Result}, 
-    io_mem::IoMem, irq, 
-    module_amba_driver, 
-    module_amba_id_table,
-    new_device_data, 
-    prelude::{Box, *}, 
-    serial:: {pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{uart_circ_empty, PortRegistration, UartPort, UartPortOps}},
-    sync::UniqueArc, 
-    types::ForeignOwnable
+    amba, bindings, c_str, define_amba_id_table, device::{self, RawDevice}, driver, driver_amba_id_table, error::{code::*, Result}, io_mem::IoMem, irq, module_amba_driver, module_amba_id_table, new_device_data, prelude::{Box, *}, print, serial:: {pl011_config::*, uart_console::{flags, Console, ConsoleOps}, uart_driver::UartDriver, uart_port::{self, uart_circ_empty, PortRegistration, UartPort, UartPortOps}, uart_state::UartState}, sync::UniqueArc, types::ForeignOwnable
 };
 
 const UART_SIZE: usize = 0x200;
@@ -49,7 +36,7 @@ static AMBA_CONSOLE: Console = {
         't' as _, 't' as _, 'y' as _, 'A' as _, 'M' as _, 'A' as _, 
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
     ];
-    Console::new::<Pl011Console>(name,UART_DRIVER.as_ptr())
+    Console::new::<Pl011Console>(name, UART_DRIVER.as_ptr())
     .with_config(
         (flags::CON_PRINTBUFFER | flags::CON_ANYTIME) as _,
         -1,0,  0, 0, 0, 0,
@@ -82,6 +69,7 @@ impl Pl011Console {
     }
 
     fn pl011_console_get_options(uap: &UartPort, baud: &mut i32, parity: &mut i32, bits: &mut i32) {
+        pr_info!("****pl011_console_get_options****\n");
         let port = unsafe { *uap.as_ptr() };
         if PL011Device::pl011_read(port.membase, UART011_CR as usize, port.iotype) & UART01X_CR_UARTEN != 0 {  // 检查 UART 是否启用
             let lcr_h = PL011Device::pl011_read(port.membase, UART011_LCRH as usize, port.iotype); // 读取行控制寄存器
@@ -187,7 +175,6 @@ impl ConsoleOps for Pl011Console {
     type Data = ();
 
     fn console_write(_co: &Console, _s: *const i8, _count: u32) {
-        pr_info!("pl011 console_write ok");
         let co_ptr = unsafe { &*_co.as_ptr() };
         let uap = &unsafe { &PORTS[co_ptr.index as usize] }.unwrap();
         let uap_ptr = unsafe { &mut *uap.as_ptr() };
@@ -240,6 +227,7 @@ impl ConsoleOps for Pl011Console {
     ) -> Result<i32>{
         let mut iotype: c_uchar = 0;
         let mut addr: bindings::resource_size_t = 0;
+        pr_info!("pl011 console_match\n");
 
         /*
          * 受 Qualcomm Technologies QDF2400 E44 勘误影响的系统有一个不同的控制台名称，
@@ -286,7 +274,7 @@ impl ConsoleOps for Pl011Console {
             return Self::pl011_console_setup(_co, _options); // 调用控制台设置函数
         }
 
-        pr_info!("console_match ok");
+        dbg!("pl011 console_match ok\n");
         Err(ENODEV)  // 如果没有匹配成功，返回 -ENODEV
     }
 
@@ -353,15 +341,17 @@ impl PL011Driver {
     fn pl011_probe_dt_alias(index: i32, dev: device::Device) -> i32 {
         let mut seen_dev_with_alias = false;
         let mut seen_dev_without_alias = false;
+        let mut ret = index;
         if bindings::CONFIG_OF == 0 {
             return index;
         }
         let raw_dev = unsafe { *dev.raw_device() };
         let np = raw_dev.of_node;
-        if !np.is_null() {
-            return index;
+        if np.is_null() {
+            pr_info!("pl011 np is not null\n");
+            return ret;
         }
-        let mut ret = unsafe { bindings::of_alias_get_id(np, "serial".as_ptr() as *const _) };
+        ret = unsafe { bindings::of_alias_get_id(np, "serial".as_ptr() as *const _) };
         if ret < 0 {
             seen_dev_without_alias = true;
             ret = index;
@@ -400,10 +390,10 @@ impl amba::Driver for PL011Driver {
         let membase = reg_mem.get();
         let irq = adev.irq(0).ok_or(ENXIO)?;
 
-        dev_info!(adev,"fifosize is {}\n",fifosize);
-        dev_info!(adev,"mapbase is 0x{:x}\n", mapbase);
-        dev_info!(adev,"membase is 0x{:p}\n",membase);
-        dev_info!(adev,"irq is {}\n",irq);
+        // dev_info!(adev,"pl011 fifosize is {}\n", fifosize);
+        // dev_info!(adev,"pl011 mapbase is 0x{:x}\n", mapbase);
+        // dev_info!(adev,"pl011 membase is 0x{:x}\n",membase);
+        // dev_info!(adev,"pl011 irq is {}\n",irq);
         let has_sysrq = 1;
         let flags = UPF_BOOT_AUTOCONF;
         let index = Self::pl011_probe_dt_alias(portnr as i32, dev.clone());
@@ -418,7 +408,7 @@ impl amba::Driver for PL011Driver {
             fifosize,
             index as _,
         ))?;
-
+        
         let rev = adev.revision_get().unwrap();
         let type_:[i8; 12] = [
             'P' as _, 'L' as _, '0' as _, '1' as _, '1' as _, ' ' as _, 
@@ -448,7 +438,7 @@ impl amba::Driver for PL011Driver {
 
         if !unsafe { IS_INIT } {
             let ret = unsafe { bindings::uart_register_driver(UART_DRIVER.as_ptr()) };
-            if ret < 0 {
+            if ret != 0 {
                 pr_err!("Failed to register uart driver\n");
                 return Err(EINVAL);
             }
@@ -458,7 +448,7 @@ impl amba::Driver for PL011Driver {
 
         unsafe { PORTS[index as usize] = Some(*port) };
 
-        let dev_data = new_device_data!(pl011_reg, pl011_res, pl011_data, "ttyAMBA")?;
+        let dev_data = new_device_data!(pl011_reg, pl011_res, pl011_data, "ttyAMA")?;
         Ok(Box::try_new(AmbaDeviceData{
             dev_data
         })?)
@@ -640,7 +630,7 @@ impl PL011Device {
         let mut cr = Self::pl011_read(pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
         let max_tx_drain_iters = pl011_port.fifosize * 2;
         let mut i = 0;
-        while Self::pl011_tx_empty(&port) == 0 {
+        while Self::pl011_tx_empty(port) == 0 {
             if i > max_tx_drain_iters {
                 break;
             }
@@ -783,6 +773,7 @@ impl PL011Device {
             Self::pl011_read(pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
         }
 
+        data.im = UART011_RTIM | UART011_RIMIM;
         Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
 
         unsafe { bindings::spin_unlock_irqrestore(&mut pl011_port.lock, flags) };
@@ -821,7 +812,7 @@ impl PL011Device {
         Self::pl011_write(cr, pl011_port.membase, UART011_CR as usize, pl011_port.iotype);
         unsafe { bindings::spin_unlock_irq(&mut pl011_port.lock) };
 
-        Self::pl011_shutdown_channel(&port, UART011_LCRH as u32);
+        Self::pl011_shutdown_channel(port, UART011_LCRH as u32);
     }
 
     fn pl011_allocate_irq(port: &UartPort) -> Result<irq::Registration<PL011Irq>> {
@@ -831,6 +822,43 @@ impl PL011Device {
         };
         Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
         request_irq(pl011_port.irq, unsafe { <Box<UartPort> as ForeignOwnable>::from_foreign(port.as_ptr() as *const c_void) } )
+    }
+
+    fn pl011_setup_status_masks(port: &UartPort, ktermios: *mut bindings::ktermios) {
+        let mut pl011_port = unsafe { *port.as_ptr() };
+        let mut termios = unsafe { *ktermios };
+        pl011_port.read_status_mask = UART011_DR_OE | 255;
+        if termios.c_cflag & bindings::INPCK != 0 {
+            pl011_port.read_status_mask |= UART011_DR_PE | UART011_DR_FE;
+        } 
+        if termios.c_iflag & (bindings::IGNBRK | bindings::BRKINT | bindings::PARMRK) != 0 {
+            pl011_port.read_status_mask |= UART011_DR_BE;
+        }
+
+        pl011_port.ignore_status_mask = 0;
+        if termios.c_iflag & bindings::IGNPAR != 0 {
+            pl011_port.ignore_status_mask |= UART011_DR_PE | UART011_DR_FE;
+        }
+        if termios.c_iflag & bindings::IGNBRK != 0 {
+            pl011_port.ignore_status_mask |= UART011_DR_BE;
+
+            if termios.c_iflag & bindings::IGNPAR != 0 {
+                pl011_port.ignore_status_mask |= UART011_DR_OE;
+            }
+        }
+
+        if termios.c_iflag & bindings::CREAD == 0 {
+            pl011_port.ignore_status_mask |= UART_DUMMY_DR_RX;
+        }
+    }
+
+    fn pl011_enbale_ms(port: &UartPort) {
+        let pl011_port = unsafe { *port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(pl011_port.private_data)
+        };
+        data.im |= UART011_RIMIM|UART011_CTSMIM|UART011_DCDMIM|UART011_DSRMIM;
+        Self::pl011_write(data.im, pl011_port.membase, UART011_IMSC as usize, pl011_port.iotype);
     }
 }
 
@@ -925,11 +953,11 @@ impl UartPortOps for PL011Device {
     }
 
     #[doc = " * @throttle:     stop receiving"]
-    fn throttle(&_port: &UartPort) {
+    fn throttle(_port: &UartPort) {
         let mut port = unsafe { *_port.as_ptr() };
         let flags: u64 = 0;
         unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
-        Self::stop_rx(&_port);
+        Self::stop_rx(_port);
         unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
@@ -1005,7 +1033,7 @@ impl UartPortOps for PL011Device {
             // data.clk.disable_unprepare();
             return retval;
         }
-        let res = Self::pl011_allocate_irq(&_port);
+        let res = Self::pl011_allocate_irq(_port);
         if res.is_err() {
             // data.clk.disable_unprepare();
             return 1;
@@ -1034,16 +1062,16 @@ impl UartPortOps for PL011Device {
         let data: Box<PL011Data> = unsafe {
             <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
         };
-        Self::pl011_disable_interrupts(&_port);
+        Self::pl011_disable_interrupts(_port);
 
         if port.rs485.flags & bindings::SER_RS485_ENABLED != 0 && 
                 data.rs485_tx_started {
-            Self::pl011_rs485_tx_stop(&_port);
+            Self::pl011_rs485_tx_stop(_port);
         }
 
         unsafe { bindings::free_irq(port.irq, _port.as_ptr() as *mut c_void) };
 
-        Self::pl011_disable_uart(&_port);
+        Self::pl011_disable_uart(_port);
         unsafe { bindings::pinctrl_pm_select_sleep_state(port.dev) };
         // TODO
     }
@@ -1055,7 +1083,108 @@ impl UartPortOps for PL011Device {
 
     #[doc = " * @set_termios: set the termios structure"]
     fn set_termios(_port: &UartPort,_new: *mut bindings::ktermios,_old: *const bindings::ktermios,) {
-        todo!()
+        let mut port = unsafe { *_port.as_ptr() };
+        let mut data: Box<PL011Data> = unsafe {
+            <Box<PL011Data> as ForeignOwnable>::from_foreign(port.private_data)
+        };
+        let mut termios = unsafe { *_new };
+        let mut clkdiv = 0;
+        let mut flags: u64 = 0;
+        let mut quot: u32 = 0;
+        let mut lcr_h: u32 = 0;
+        let mut old_cr: u32 = 0;
+
+        if data.vendor.oversampling {
+            clkdiv = 8;
+        } else {
+            clkdiv = 16;
+        }
+
+        let baud = unsafe { 
+            bindings::uart_get_baud_rate(_port.as_ptr(), _new, _old, 0, port.uartclk / clkdiv) 
+        };
+        if baud > port.uartclk/16 {
+            quot = unsafe { bindings::div_round_closest(port.uartclk * 8, baud) };
+        } else {
+            quot = unsafe { bindings::div_round_closest(port.uartclk * 4, baud) };
+        }
+        match termios.c_cflag & bindings::CSIZE {
+            bindings::CS5 => {
+                lcr_h = UART01X_LCRH_WLEN_5;
+            }
+            bindings::CS6 => {
+                lcr_h = UART01X_LCRH_WLEN_6;
+            }
+            bindings::CS7 => {
+                lcr_h = UART01X_LCRH_WLEN_7;
+            }
+            _ => { // CS8
+                lcr_h = UART01X_LCRH_WLEN_8;
+            }
+        }
+        if termios.c_cflag & bindings::CSTOPB != 0 {
+            lcr_h |= UART01X_LCRH_STP2;
+        }
+
+        if termios.c_cflag & bindings::PARENB != 0 {
+            lcr_h |= UART01X_LCRH_PEN;
+            if termios.c_cflag & bindings::PARODD == 0 {
+                lcr_h |= UART01X_LCRH_EPS;
+            }
+            if termios.c_cflag & bindings::CMSPAR != 0 {
+                lcr_h |= UART011_LCRH_SPS;
+            }
+        }
+
+        if data.fifosize > 1 {
+            lcr_h |= UART01X_LCRH_FEN;
+        }
+
+        let bits = unsafe { bindings::tty_get_frame_size(termios.c_cflag) } as u32;
+
+        unsafe { bindings::spin_lock_irqsave(&mut port.lock, flags) };
+        unsafe { bindings::uart_update_timeout(_port.as_ptr(), termios.c_cflag, baud) };
+
+        unsafe  { data.rs485_tx_drain_interval = bindings::div_round_up(bits*1000*1000, baud) };
+
+        Self::pl011_setup_status_masks(_port, _new);
+
+        if unsafe { bindings::uart_enable_ms(_port.as_ptr(), termios.c_cflag) } != 0 {
+            Self::pl011_enbale_ms(_port);
+        } 
+
+        if port.rs485.flags & bindings::SER_RS485_ENABLED != 0 {
+            termios.c_cflag &= !bindings::CRTSCTS;
+        }
+
+        old_cr = Self::pl011_read(port.membase, UART011_CR as usize, port.iotype);
+
+        if termios.c_cflag & bindings::CRTSCTS != 0 {
+            if old_cr & UART011_CR_RTS != 0 {
+                old_cr |= UART011_CR_RTSEN;
+            }
+            old_cr |= UART011_CR_CTSEN;
+            port.status |= UPSTAT_AUTOCTS | UPSTAT_AUTORTS;
+        } else {
+            old_cr &= !(UART011_CR_CTSEN | UART011_CR_RTSEN);
+            port.status &= !(UPSTAT_AUTOCTS | UPSTAT_AUTORTS);
+        }
+
+        if data.vendor.oversampling {
+            if baud >= 3000000 && baud < 3250000 && quot > 1 {
+                quot -= 1;
+            } else if baud >= 3250000  && quot > 2 {
+                quot -= 2;
+            }
+        }
+        Self::pl011_write(quot & 0x3f, port.membase, UART011_IBRD as usize, port.iotype);
+        Self::pl011_write(quot >> 6, port.membase, UART011_FBRD as usize, port.iotype);
+
+        Self::pl011_write(lcr_h, port.membase, UART011_LCRH as usize, port.iotype);
+
+        old_cr  |= UART011_CR_RXE;
+        Self::pl011_write(old_cr, port.membase, UART011_CR as usize, port.iotype);
+        unsafe { bindings::spin_unlock_irqrestore(&mut port.lock, flags) };
     }
 
     #[doc = " * @set_ldisc:    set the line discipline"]
@@ -1093,9 +1222,11 @@ impl UartPortOps for PL011Device {
 
     #[doc = " * @config_port:  configure the UART port"]
     fn config_port(uart_port: &UartPort,flags:i32) {
-        let mut port = unsafe { *uart_port.as_ptr() };
         if flags & UART_CONFIG_TYPE as i32 != 0 {
-            port.type_ = PORT_AMBA;
+            let p = unsafe { *uart_port.as_ptr() };
+            pr_info!("===pl011 port.fifosize = {}\n", p.fifosize);
+            pr_info!("===pl011 PORT_AMBA = {}\n", PORT_AMBA);
+            pr_info!("===pl011 port.type = {}\n", p.type_);
         }
     }
 
@@ -1205,16 +1336,16 @@ impl irq::Handler for PL011Irq {
                         port.membase, UART011_ICR as usize, port.iotype);
 
                 if status as u32 & (UART011_RTIS|UART011_RXIS) != 0 {
-                    PL011Device::pl011_rx_chars(&data);
+                    PL011Device::pl011_rx_chars(data);
                 }
 
                 if status as u32 & (UART011_DSRMIS|UART011_DCDMIS|
 				      UART011_CTSMIS|UART011_RIMIS) != 0 {
-                    PL011Device::pl011_modem_status(&data);
+                    PL011Device::pl011_modem_status(data);
                 }
 
                 if status as u32 & UART011_TXIS != 0 {
-                    PL011Device::pl011_tx_chars(&data, true);
+                    PL011Device::pl011_tx_chars(data, true);
                 }
 
                 if pass_counter == 0 {

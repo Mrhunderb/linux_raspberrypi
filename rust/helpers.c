@@ -24,6 +24,7 @@
 #include "linux/compiler.h"
 #include "linux/delay.h"
 #include "linux/interrupt.h"
+#include "linux/math.h"
 #include "linux/pinctrl/consumer.h"
 #include "linux/serial_core.h"
 #include "linux/tty_flip.h"
@@ -523,6 +524,24 @@ uint rust_helper_amba_rev(struct amba_device * dev)
 	return amba_rev(dev);
 }
 EXPORT_SYMBOL_GPL(rust_helper_amba_rev);
+
+uint rust_helper_div_round_closest(unsigned int x, unsigned int divisor)
+{
+	return DIV_ROUND_CLOSEST(x, divisor);
+}
+EXPORT_SYMBOL_GPL(rust_helper_div_round_closest);
+
+uint rust_helper_div_round_up(unsigned int x, unsigned int divisor)
+{
+	return DIV_ROUND_UP(x, divisor);
+}
+EXPORT_SYMBOL_GPL(rust_helper_div_round_up);
+
+uint rust_helper_uart_enable_ms(struct uart_port *port, unsigned int mcr)
+{
+	return UART_ENABLE_MS(port, mcr);
+}
+EXPORT_SYMBOL_GPL(rust_helper_uart_enable_ms);
 
 /*
  * `bindgen` binds the C `size_t` type as the Rust `usize` type, so we can

@@ -7,7 +7,7 @@
 use super::uart_driver::UartDriver;
 
 use crate::{
-    bindings, dev_err, dev_info, device, error::{code::*, Result}, pr_err, pr_warn, serial::uart_state::UartState, types::ForeignOwnable
+    bindings, dev_err, dev_info, device, error::{code::*, Result}, pr_err, pr_info, pr_warn, serial::uart_state::UartState, types::ForeignOwnable
 };
 
 use core::{ 
@@ -209,14 +209,15 @@ impl<T: UartPortOps> PortRegistration<T> {
         port.0.dev = dev.raw_device();
         port.0.ops = Adapter::<T>::build();
         port.0.private_data = <T::Data as ForeignOwnable>::into_foreign(data) as *mut c_void;
+        port.0.has_sysrq = 1;
         dev_info!(dev, "irq: {}\n", port.0.irq);
 
         let ret = unsafe { bindings::uart_add_one_port(uart.as_ptr(), port.as_ptr()) };
-        dev_info!(dev, "uart_add_one_port returned {}\n", ret);
-        if ret < 0 {
+        if ret != 0 {
             // SAFETY: `data_pointer` was returned by `into_foreign` above.
-            dev_err!(dev, "Failed to add AMBA-PL011 port driver\n");
+            dev_err!(dev, "pl011 Failed to add AMBA-PL011 port driver\n");
         }
+
 
         this.dev = Some(device::Device::from_dev(dev));
         this.is_registered = true;
